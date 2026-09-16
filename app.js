@@ -1,4 +1,5 @@
 import './drive-sync.js';
+import { googleCalendarURL } from './calendar-link.js';
 import { snapshot, write, put, remove, uid } from './db.js';
 // 画面要素
 const app = document.querySelector('#app'),
@@ -388,9 +389,15 @@ function renderDetail(c) {
                   ></span
                 >
               </button>
+              <div class="event-calendar">
+                ${link(googleCalendarURL(c, e), 'Googleカレンダーに追加')}
+              </div>
             </div>`,
         )
         .join('') || '<div class="empty">面接や締切などの予定を追加できます。</div>'}
+      ${events.length
+        ? '<p class="note calendar-note">Google側で内容を確認して保存してください（終了は仮で1時間後）。追加後の変更・削除は連動しません。同じ予定の再追加は重複します。</p>'
+        : ''}
     </section>
     <section class="panel section">
       <h2>企業情報・メモ</h2>
@@ -630,7 +637,9 @@ function eventForm(c, e) {
           e?.date || localDate() + 'T10:00',
           'datetime-local',
           true,
-        )}${notes(e?.notes)}${actions(e ? 'delete-event' : null, e?.id)}
+        )}${notes(e?.notes)}
+        <p class="note">保存後、予定の横の「Googleカレンダーに追加」から登録できます。</p>
+        ${actions(e ? 'delete-event' : null, e?.id)}
       </form>`,
   );
   formHandler(async (f) => {

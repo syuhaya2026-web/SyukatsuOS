@@ -92,3 +92,14 @@ Driveの「就活OS / 企業別ノート（閲覧用）」に、企業ごとの�
 - `company-notes.js`: 閲覧用テキストの組み立て
 - `data-validation.js`: 受信データ・参照・履歴の検証
 - `tests/merge.test.mjs`: マージ・削除・添付・履歴・ノートの確認。Node.js 22以降で `node --test tests/merge.test.mjs` を実行できます。アプリの利用にNode.jsは不要です。
+
+## Googleカレンダーに追加
+
+企業詳細の「予定・イベント」にある「Googleカレンダーに追加」を押すと、企業名・予定名・開始日時・予定メモを入力済みのGoogleカレンダー画面が開きます。アカウントと内容を確認してGoogle側で「保存」してください。Drive未接続でも利用でき、Calendar APIやOAuthの追加設定は不要です。
+
+終了時刻は仮で1時間後です。Google側で変更できます。長い予定名・メモはURLの長さを抑えるため省略します。企業メモや添付は送信しません。ボタンを押した時点で予定情報をGoogleへ渡します。
+
+この方式は登録画面へのリンクです。保存完了をアプリから確認できないため、登録済み表示・自動登録・編集削除の連動はありません。再度保存すると重複するので、登録済みの予定の修正はGoogleカレンダー側でも行ってください。
+
+実装は `calendar-link.js`。公式の予定作成リンク形式を使用しています：
+https://developers.google.com/workspace/calendar/api/concepts/inviting-attendees-to-events

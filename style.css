@@ -675,3 +675,24 @@ select {
   width: 100%;
   margin-top: 18px;
 }
+
+/* 予定からGoogleカレンダーへの登録 */
+.event-row {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.event-row > button {
+  min-width: 0;
+  flex: 1 1 180px;
+  overflow-wrap: anywhere;
+}
+.event-calendar {
+  flex: 0 1 auto;
+}
+.event-calendar .button {
+  font-size: 12px;
+  padding: 10px 12px;
+}
+.calendar-note {
+  margin-top: 16px;
+}
