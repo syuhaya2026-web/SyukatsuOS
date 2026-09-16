@@ -1,3 +1,4 @@
+import './drive-sync.js';
 import { all, write, put, remove, uid } from './db.js';
 // 画面要素
 const app = document.querySelector('#app'),
@@ -114,6 +115,8 @@ async function commit(ops) {
   await write(ops);
   await refresh();
 }
+// Driveからのデータ反映
+window.addEventListener('drive-data', () => refresh().catch((e) => toast(e.message)));
 // 画面ルーティング
 const route = () => location.hash.slice(1).split('/').map(decodeURIComponent);
 function render() {

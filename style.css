@@ -574,3 +574,23 @@ input[type='checkbox'] {
 .file .muted {
   flex-shrink: 0;
 }
+
+/* Drive同期 */
+.drive-status {
+  font-size: 11px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+.topbar {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+#drive-dialog {
+  width: min(600px, calc(100% - 24px));
+}
+#drive-dialog .actions {
+  margin-top: 20px;
+}
+#drive-dialog input {
+  font-size: 12px;
+}

@@ -70,3 +70,9 @@ Google OAuth/APIは未実装です。イベントには将来用の googleCalend
 ## 公開準備とコード整形
 
 公開手順・端末保存のしくみ・インストール方法は [PUBLISH.md](./PUBLISH.md) にまとめています。コードは2スペースで整形し、機能・要素の見出しコメントを付けています。再整形には `.prettierrc.json` を利用できます（Prettier 3系）。アプリ実行時に整形ツールやNode.jsは不要です。
+
+## Google Drive同期（任意）
+
+右上のDriveボタンから接続できます。本人によるGoogle OAuthクライアントの作成が必要です。[GOOGLE-DRIVE.md](./GOOGLE-DRIVE.md) の手順を参照してください。接続しない場合は従来どおり端末だけに保存します。
+
+同期情報はIndexedDB version 2の `sync` ストアに保持します。Google Calendar連携とは別機能です。添付込みの履歴JSONをDriveへ保存し、20MB上限・接続し直し・競合時の手動選択があります。実Googleアカウントでの動作確認は設定後に必要です。
