@@ -696,3 +696,30 @@ select {
 .calendar-note {
   margin-top: 16px;
 }
+
+/* iPhoneの日付入力がグリッドの幅を押し広げないようにする */
+.form,
+.form > label {
+  min-width: 0;
+}
+.form {
+  grid-template-columns: minmax(0, 1fr);
+}
+input[type='date'],
+input[type='datetime-local'] {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 44px;
+}
+input::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
+}
+.startup-dismiss {
+  display: flex;
+  justify-content: flex-end;
+}

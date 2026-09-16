@@ -29,7 +29,8 @@ const escape = (v) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
-let startMode = false;
+let startMode = false,
+  connectionStarted = false;
 let status = '未接続',
   message = 'Google Driveに接続すると、編集後に自動保存します。';
 function notify(label, detail = '') {
@@ -147,6 +148,7 @@ function connect() {
     if (!window.google?.accounts?.oauth2)
       throw new Error('Googleの読み込み中です。少し待って接続を押してください。');
     localStorage.setItem('drive-client-id', id);
+    connectionStarted = true;
     authPending = true;
     notify('接続中', 'Googleの確認画面を操作してください。');
     google.accounts.oauth2
@@ -663,12 +665,19 @@ setInterval(() => {
 // 起動時の再接続案内（認証操作はユーザーのタップで開始）
 function renderStartup() {
   const configured = localStorage.getItem('drive-client-id') || '';
-  panel.innerHTML = `<div class="startup-connect"><p class="eyebrow">就活OS</p><h2>最新の記録で始める</h2><p>Google Driveに接続して、別の端末の変更を読み込みます。</p><input id="drive-client" type="hidden" value="${escape(configured)}"><p class="muted">${escape(message || 'Googleへの接続を準備しています。')}</p><button class="primary" id="startup-connect" ${busy || authPending || !window.google?.accounts?.oauth2 ? 'disabled' : ''}>Googleで続ける</button><button id="startup-local">端末の記録で使う</button><button class="back" id="startup-settings">接続設定</button><p class="muted">自動接続にはGoogleの許可が必要です。端末の記録で使う場合、Driveとの同期は行いません。</p></div>`;
+  panel.innerHTML = `${connectionStarted ? '<div class="startup-dismiss"><button id="startup-close" aria-label="閉じて接続を続ける">✕</button></div>' : ''}<div class="startup-connect"><p class="eyebrow">就活OS</p><h2>最新の記録で始める</h2><p>Google Driveに接続して、別の端末の変更を読み込みます。</p><input id="drive-client" type="hidden" value="${escape(configured)}"><p class="muted">${escape(message || 'Googleへの接続を準備しています。')}</p><button class="primary" id="startup-connect" ${busy || authPending || !window.google?.accounts?.oauth2 ? 'disabled' : ''}>Googleで続ける</button><button id="startup-local">${authPending || busy || token ? '閉じてアプリを使う' : '端末の記録で使う'}</button><button class="back" id="startup-settings">接続設定</button><p class="muted">${authPending || busy || token ? '閉じても接続・同期は続きます。進み具合は右上のDrive表示で確認できます。' : '自動接続にはGoogleの許可が必要です。未接続の間は端末だけに保存します。'}</p></div>`;
   panel.querySelector('#startup-connect').onclick = connect;
+  const close = panel.querySelector('#startup-close');
+  if (close)
+    close.onclick = () => {
+      startMode = false;
+      panel.close();
+    };
   panel.querySelector('#startup-local').onclick = () => {
     startMode = false;
     panel.close();
-    notify('未接続', '端末の記録で使用中です。同期するにはDriveに接続してください。');
+    if (!authPending && !busy && !token)
+      notify('未接続', '端末の記録で使用中です。同期するにはDriveに接続してください。');
   };
   panel.querySelector('#startup-settings').onclick = () => {
     startMode = false;

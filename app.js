@@ -601,6 +601,10 @@ function viewProgress(p) {
     <div class="detail-header">
       <div class="muted">${dateLabel(p.date)}</div>
       <h1>${esc(p.title)}</h1>
+      <div class="actions">${link(googleCalendarURL(c, p), 'Googleカレンダーに追加')}</div>
+      <p class="note">
+        終日の予定として開きます。Google側で日時を確認して保存してください。変更・削除は連動せず、再追加すると重複します。
+      </p>
     </div>
     <section class="panel section">
       <h2>メモ</h2>

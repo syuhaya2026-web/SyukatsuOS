@@ -11,16 +11,21 @@ const calendarDate = (date) =>
 export function googleCalendarURL(company, event) {
   const start = new Date(event.date);
   if (!Number.isFinite(start.getTime())) return '';
-  // アプリは開始時刻のみを保持するため、終了は1時間後を仮置きする。
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const allDay = /^\d{4}-\d{2}-\d{2}$/.test(event.date);
+  // 日付だけの進捗は終日、時刻付きの予定は終了を1時間後で仮置きする。
+  const end = new Date(start.getTime() + (allDay ? 24 : 1) * 60 * 60 * 1000);
   const url = new URL('https://calendar.google.com/calendar/r/eventedit');
   url.search = new URLSearchParams({
     action: 'TEMPLATE',
     text: excerpt(`${company.name}｜${event.title}`, 180),
-    dates: `${calendarDate(start)}/${calendarDate(end)}`,
+    dates: allDay
+      ? `${event.date.replace(/-/g, '')}/${calendarDate(end).slice(0, 8)}`
+      : `${calendarDate(start)}/${calendarDate(end)}`,
     details: [
       excerpt(event.notes, 600),
-      '就活OSから追加。終了時刻は仮で1時間後です。必要に応じて変更してください。',
+      allDay
+        ? '就活OSの選考タイムラインから追加。終日で仮設定しています。必要に応じて時刻を指定してください。'
+        : '就活OSから追加。終了時刻は仮で1時間後です。必要に応じて変更してください。',
     ]
       .filter(Boolean)
       .join('\n\n'),
