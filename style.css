@@ -622,3 +622,56 @@ select {
 .startup-connect .eyebrow {
   margin-bottom: 8px;
 }
+
+/* 項目単位の競合解決 */
+.merge-item {
+  border-top: 1px solid var(--line, #35473c);
+  margin-top: 24px;
+  padding-top: 18px;
+  overflow-wrap: anywhere;
+}
+.merge-item h3 {
+  margin-bottom: 6px;
+}
+.merge-option {
+  display: block;
+  border: 1px solid var(--line, #35473c);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0;
+  cursor: pointer;
+}
+.merge-option:has(input:checked) {
+  border-color: var(--green);
+  background: #263e30;
+}
+.merge-option > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#drive-dialog .merge-option input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--green);
+  flex-shrink: 0;
+}
+.merge-option small {
+  display: block;
+  color: #9eafa3;
+  margin-top: 6px;
+}
+.merge-option pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow-y: auto;
+  font: inherit;
+  color: #ecf2ed;
+  margin-bottom: 0;
+}
+#drive-resolve {
+  width: 100%;
+  margin-top: 18px;
+}

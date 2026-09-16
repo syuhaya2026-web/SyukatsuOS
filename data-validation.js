@@ -23,6 +23,11 @@ export function validate(doc) {
     !object(doc.data)
   )
     bad('Drive履歴の形式が不正です。端末データは変更していません。');
+  if (
+    doc.device !== undefined &&
+    (!object(doc.device) || !id(doc.device.id) || !text(doc.device.name, 80))
+  )
+    bad('端末情報の形式が不正です。');
   const sets = {};
   for (const name of ['companies', 'progress', 'events', 'files']) {
     const rows = doc.data[name];

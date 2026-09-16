@@ -1,9 +1,12 @@
+import { commonBase, mergeRecords, deviceLabel } from './merge.js';
+import { companyNote, noteName } from './company-notes.js';
 import { snapshot, syncUpdate, stores, uid } from './db.js';
 // Google Drive接続・同期状態（アクセストークンはメモリのみ）
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 import { validate, headsOf, readBoundedJSON, MAX_SNAPSHOT_BYTES } from './data-validation.js';
 export { validate, headsOf };
 const LIMIT = MAX_SNAPSHOT_BYTES;
+let historyDocs = [];
 let scanBytes = 0,
   authPending = false;
 let token = '',
@@ -54,14 +57,59 @@ function loadGoogle() {
   });
   return scriptReady;
 }
+// 端末名と競合表示
+function thisDevice() {
+  let id = localStorage.getItem('drive-device-id');
+  if (!id) {
+    id = uid();
+    localStorage.setItem('drive-device-id', id);
+  }
+  const ua = navigator.userAgent;
+  const fallback = /iPhone/.test(ua)
+    ? 'iPhone'
+    : /iPad/.test(ua) || (/Mac/.test(ua) && navigator.maxTouchPoints > 1)
+      ? 'iPad'
+      : /Mac/.test(ua)
+        ? 'Mac'
+        : /Android/.test(ua)
+          ? 'Android'
+          : /Windows/.test(ua)
+            ? 'Windows PC'
+            : 'この端末';
+  return { id, name: localStorage.getItem('drive-device-name') || fallback };
+}
+function conflictValue(item, variant) {
+  const v = variant.value;
+  if (v === undefined) return '削除する';
+  if (item.field === 'currentStatusId')
+    return variant.sources[0].data.progress.find((p) => p.id === v)?.title || '未設定';
+  if (v && typeof v === 'object')
+    return [
+      v.name || v.title || '',
+      v.date || '',
+      v.notes || '',
+      v.base64 ? '添付本体（' + Math.floor((v.base64.length * 3) / 4) + 'バイト前後）' : '',
+      item.store === 'companies' ? 'この企業と残っている関連記録を保持します。' : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  return String(v ?? '');
+}
+function conflictMarkup() {
+  if (!conflict) return '';
+  return `<div class="merge-conflicts"><p class="note">別々の変更は自動で取り込まれます。以下の衝突だけ残す内容を選んでください。「削除または編集」は関連記録にも影響します。</p>${conflict.pending.map((item, index) => `<section class="merge-item"><h3>${escape(item.company)}</h3><p class="muted">${escape({ companies: '企業情報', progress: '選考タイムライン', events: '予定', files: '添付ファイル' }[item.store])} / ${escape(item.record)} / ${escape(item.label)}</p>${item.variants.map((variant, n) => `<label class="merge-option"><span><input type="radio" name="merge-${index}" value="${n}" ${conflict.choices[item.key] === n ? 'checked' : ''}>${escape(variant.sources.map(deviceLabel).join(' / '))}</span><small>${escape(variant.sources.map((x) => new Date(x.savedAt).toLocaleString('ja-JP')).join(' / '))}</small><pre>${escape(conflictValue(item, variant))}</pre></label>`).join('')}</section>`).join('')}<button class="primary" id="drive-resolve" ${busy ? 'disabled' : ''}>選んだ項目を反映して統合</button></div>`;
+}
 // 接続設定画面
 function renderPanel() {
   if (startMode) {
     renderStartup();
     return;
   }
-  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">記録・添付を自分のDriveの「就活OS」に保存します。接続中は変更後と30秒ごとに同期します。再起動・認証切れの後は「接続」が必要です。接続前の端末データも同期対象になります。</p>${conflict ? `<label>使用するデータ<select id="drive-choice"><option value="local">この端末のデータ</option>${conflict.heads.map((x) => `<option value="${escape(x.id)}">Drive：${escape(x.savedAt)} / ${x.data.companies.length}企業</option>`).join('')}</select></label><p class="note">両方に変更があります。選んだ内容で現在のデータ全体を置き換えます。選ばなかった内容もDriveに履歴として残します。</p><button id="drive-resolve">選んだ内容で統一する</button>` : ''}<div class="actions"><button id="drive-connect" ${token || busy || authPending ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token || busy ? 'disabled' : ''}>接続を解除</button></div><p class="muted">1回の同期は添付を含むJSONで20MBまで。履歴は自動削除しません。通信中にアプリを閉じると、次の接続まで未同期になります。</p>`;
+  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p>${conflictMarkup()}<label>この端末の名前<input id="drive-device" maxlength="80" value="${escape(thisDevice().name)}"></label><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">接続中は保存後と30秒ごとに同期します。別項目は自動統合し、同じ項目の変更だけ選択します。再起動・認証切れ後は接続操作が必要です。</p><div class="actions"><button id="drive-connect" ${token || busy || authPending ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token || busy ? 'disabled' : ''}>接続を解除</button></div><p class="muted">Driveの「企業別ノート」は閲覧用です。編集はアプリから行ってください。添付込み20MB上限・履歴の自動削除なし。</p>`;
   panel.querySelector('#drive-close').onclick = () => panel.close();
+  panel.querySelector('#drive-device').oninput = (e) => {
+    localStorage.setItem('drive-device-name', e.target.value.trim().slice(0, 80));
+  };
   panel.querySelector('#drive-connect').onclick = connect;
   panel.querySelector('#drive-now').onclick = () => run();
   panel.querySelector('#drive-disconnect').onclick = () => {
@@ -72,7 +120,17 @@ function renderPanel() {
     conflict = null;
     notify('未接続', '端末・Driveの保存データは残っています。');
   };
-  if (conflict) panel.querySelector('#drive-resolve').onclick = resolveConflict;
+  if (conflict) {
+    conflict.pending.forEach((item, index) =>
+      panel.querySelectorAll(`[name="merge-${index}"]`).forEach(
+        (input) =>
+          (input.onchange = () => {
+            conflict.choices[item.key] = Number(input.value);
+          }),
+      ),
+    );
+    panel.querySelector('#drive-resolve').onclick = resolveConflict;
+  }
 }
 button.onclick = () => {
   renderPanel();
@@ -185,7 +243,7 @@ async function list(q) {
   do {
     const params = new URLSearchParams({
       q,
-      fields: 'nextPageToken,files(id,name)',
+      fields: 'nextPageToken,files(id,name,appProperties)',
       pageSize: '1000',
     });
     if (pageToken) params.set('pageToken', pageToken);
@@ -259,6 +317,7 @@ async function readHeads() {
   const docs = [];
   for (const f of files)
     docs.push(validate(await api(`files/${encodeURIComponent(f.id)}?alt=media`)));
+  historyDocs = docs;
   return headsOf(docs);
 }
 async function upload(doc) {
@@ -284,74 +343,176 @@ async function upload(doc) {
     ]),
   });
 }
-// 新旧の関係で判定し、同時編集を黙って上書きしない
+// 共通履歴から各項目の変更を統合する
+const headKey = (heads) =>
+  heads
+    .map((x) => x.id)
+    .sort()
+    .join('|');
+async function setConflict(local, heads, base, choices = {}) {
+  const signature = headKey(heads);
+  if (conflict?.signature === signature && conflict.revision === local.state.revision)
+    choices = conflict.choices;
+  const merged = mergeRecords(base, heads, choices);
+  conflict = {
+    heads,
+    base,
+    choices,
+    pending: merged.conflicts,
+    signature,
+    revision: local.state.revision,
+  };
+  startMode = false;
+  notify(
+    '競合あり',
+    `${merged.conflicts.length}件の項目で選択が必要です。他の変更は統合されます。`,
+  );
+  if (!panel.open && !document.querySelector('#modal').open) {
+    renderPanel();
+    panel.showModal();
+  }
+}
 async function perform() {
-  const local = await snapshot();
+  let local = await snapshot();
   if (local.state.owner && local.state.owner !== owner)
     throw new Error('別のGoogleアカウントのため同期できません。');
-  const heads = await readHeads(),
-    base = local.state.base || [],
-    same = heads.length === base.length && heads.every((x) => base.includes(x.id));
-  const empty = stores.every((name) => local[name].length === 0);
-  const dirty = local.state.dirty || (!local.state.owner && !empty);
-  if (heads.length === 1 && heads[0].id === local.state.revision) {
-    await syncUpdate(local.state.revision, { base: [heads[0].id], dirty: false, owner });
-    await reportCompletion();
-    return;
-  }
-  if ((heads.length > 1 && !same) || (!same && heads.length && dirty)) {
-    conflict = { heads, revision: local.state.revision };
-    notify('競合あり', '同期を止めました。Driveボタンから使用する内容を選んでください。');
-    return;
-  }
-  if (!heads.length && base.length)
-    throw new Error('Driveの履歴が見つかりません。フォルダの削除・変更を確認してください。');
-  if (!dirty && heads.length && !same) {
-    const remote = heads[0];
-    if (document.querySelector('#modal').open) {
-      notify('受信待ち', '編集中の画面を閉じると最新情報を読み込みます。');
+  let heads = await readHeads();
+  if (!heads.length && local.state.base?.length)
+    throw new Error('Driveの履歴が見つかりません。履歴を削除せず確認してください。');
+  // 送信成功直後に通信が切れた場合は、同じ変更を再送しない。
+  const accepted = historyDocs.find((x) => x.id === local.state.revision);
+  if (accepted) {
+    if (!(await syncUpdate(local.state.revision, { base: [accepted.id], dirty: false, owner }))) {
+      schedule();
       return;
     }
-    if (
-      await syncUpdate(
-        local.state.revision,
-        { base: [remote.id], dirty: false, owner, revision: uid() },
-        decode(remote),
-      )
-    )
-      window.dispatchEvent(new Event('drive-data'));
-    else schedule();
-  } else if (dirty) {
+    local = await snapshot();
+  }
+  const dirty =
+    local.state.dirty || (!local.state.owner && stores.some((name) => local[name].length));
+  if (dirty) {
     const doc = {
       format: 'syukatsu-drive',
       version: 1,
       id: local.state.revision === 'initial' ? uid() : local.state.revision,
-      parents: base,
+      parents: local.state.base || [],
       savedAt: new Date().toISOString(),
+      device: thisDevice(),
       data: await encode(local),
     };
     await upload(doc);
-    if (
-      !(await syncUpdate(local.state.revision, {
-        base: [doc.id],
-        dirty: false,
-        owner,
-      }))
-    ) {
-      const latest = await snapshot();
-      await syncUpdate(latest.state.revision, { base: [doc.id], owner });
+    if (!(await syncUpdate(local.state.revision, { base: [doc.id], dirty: false, owner }))) {
+      const current = await snapshot();
+      await syncUpdate(current.state.revision, { base: [doc.id], owner });
       schedule();
-    }
-    const after = await readHeads();
-    if (after.length > 1) {
-      conflict = { heads: after, revision: (await snapshot()).state.revision };
-      notify('競合あり', '別の端末でも編集されました。使用する内容を選んでください。');
       return;
     }
-  } else await syncUpdate(local.state.revision, { owner });
+    local = await snapshot();
+    heads = await readHeads();
+  }
+  if (!heads.length) {
+    await syncUpdate(local.state.revision, { owner });
+    await reportCompletion();
+    return;
+  }
+  if (heads.length === 1) {
+    const doc = heads[0];
+    if (headKey(heads) !== (local.state.base || []).slice().sort().join('|')) {
+      if (document.querySelector('#modal').open) {
+        notify('受信待ち', '編集中の画面を閉じると最新情報を読み込みます。');
+        return;
+      }
+      if (
+        !(await syncUpdate(
+          local.state.revision,
+          { base: [doc.id], dirty: false, owner, revision: uid() },
+          decode(doc),
+        ))
+      ) {
+        schedule();
+        return;
+      }
+      window.dispatchEvent(new Event('drive-data'));
+    }
+    await finishSync(doc);
+    return;
+  }
+  const base = commonBase(historyDocs, heads),
+    merged = mergeRecords(base, heads);
+  if (merged.conflicts.length) {
+    await setConflict(local, heads, base);
+    return;
+  }
+  if (document.querySelector('#modal').open) {
+    notify('受信待ち', '編集中の画面を閉じると変更を統合します。');
+    return;
+  }
+  await saveMerge(local, heads, merged.data);
+}
+// 全分岐を親とする新しい履歴を作る。元の履歴は削除しない。
+async function saveMerge(local, heads, data) {
+  const doc = {
+    format: 'syukatsu-drive',
+    version: 1,
+    id: uid(),
+    parents: heads.map((x) => x.id),
+    savedAt: new Date().toISOString(),
+    device: thisDevice(),
+    data,
+  };
+  const replacement = decode(doc);
+  await upload(doc);
+  if (
+    !(await syncUpdate(
+      local.state.revision,
+      { base: [doc.id], dirty: false, owner, revision: uid() },
+      replacement,
+    ))
+  ) {
+    schedule();
+    return;
+  }
+  conflict = null;
+  window.dispatchEvent(new Event('drive-data'));
+  await finishSync(doc);
+}
+async function finishSync(doc) {
+  const latest = await snapshot();
+  if (latest.state.dirty) {
+    schedule();
+    return;
+  }
+  const heads = await readHeads();
+  if (heads.length !== 1 || heads[0].id !== doc.id) {
+    schedule();
+    return;
+  }
+  try {
+    {
+      // 別端末の遅れた書込も次の同期で修復するため、毎回メタデータを確認する。
+      await publishNotes(doc);
+      const after = await readHeads();
+      if (after.length !== 1 || after[0].id !== doc.id) {
+        schedule();
+        return;
+      }
+      await syncUpdate(latest.state.revision, { notesRevision: doc.id });
+    }
+  } catch (error) {
+    const now = await snapshot();
+    if (now.state.dirty) {
+      schedule();
+      return;
+    }
+    conflict = null;
+    notify(
+      token ? '同期済み' : '再接続が必要',
+      '記録はDriveに保存済みですが、企業別ノートは未更新です。' + error.message,
+    );
+    return;
+  }
   await reportCompletion();
 }
-// 保存中の追加編集を「同期済み」と誤表示しない
 async function reportCompletion() {
   const latest = await snapshot();
   if (latest.state.dirty) {
@@ -361,73 +522,111 @@ async function reportCompletion() {
   conflict = null;
   notify('同期済み', new Date().toLocaleTimeString('ja-JP') + ' に確認しました。');
 }
-// 競合解消も新しい履歴として残す
+// 選択中にデータが変わった場合、選択を使い回さず再確認する。
 async function resolveConflict() {
   if (navigator.locks) return navigator.locks.request('syukatsu-drive', resolveConflictLocked);
   return resolveConflictLocked();
 }
 async function resolveConflictLocked() {
   if (busy || !conflict) return;
-  const choice = panel.querySelector('#drive-choice').value;
-  if (!confirm('選んだ内容で現在のデータ全体を置き換えます。続けますか？')) return;
+  if (conflict.pending.some((item) => !Object.hasOwn(conflict.choices, item.key))) {
+    notify('競合あり', '各項目について、残す内容を選んでください。');
+    return;
+  }
   busy = true;
+  notify('統合中', '選択した内容を確認して保存しています。');
   try {
-    let heads = await readHeads();
-    if (
-      heads
-        .map((x) => x.id)
-        .sort()
-        .join() !==
-      conflict.heads
-        .map((x) => x.id)
-        .sort()
-        .join()
-    )
-      throw new Error('Driveに新しい変更があります。今すぐ同期して選び直してください。');
-    const local = await snapshot();
-    if (local.state.revision !== conflict.revision)
-      throw new Error('端末に新しい変更があります。今すぐ同期して選び直してください。');
-    const chosen = heads.find((x) => x.id === choice);
-    if (choice !== 'local' && !chosen) throw new Error('選択内容が見つかりません。');
-    const own = choice === 'local' ? local : decode(chosen);
-    if (choice !== 'local') {
-      const rescue = {
-        format: 'syukatsu-drive',
-        version: 1,
-        id: uid(),
-        parents: local.state.base || [],
-        savedAt: new Date().toISOString(),
-        data: await encode(local),
-      };
-      await upload(rescue);
-      const before = heads;
+    const local = await snapshot(),
       heads = await readHeads();
-      const expected = new Set([
-        ...before.map((x) => x.id).filter((x) => !rescue.parents.includes(x)),
-        rescue.id,
-      ]);
-      if (heads.length !== expected.size || heads.some((x) => !expected.has(x.id)))
-        throw new Error(
-          '競合確認中に別端末が更新しました。今すぐ同期して選び直してください。端末データは変更していません。',
-        );
+    if (local.state.revision !== conflict.revision || headKey(heads) !== conflict.signature)
+      throw new Error('選択中に新しい変更がありました。「今すぐ同期」して選び直してください。');
+    const merged = mergeRecords(conflict.base, heads, conflict.choices);
+    if (merged.conflicts.length) {
+      await setConflict(local, heads, conflict.base, conflict.choices);
+      return;
     }
-    if (
-      !(await syncUpdate(
-        local.state.revision,
-        { dirty: true, base: heads.map((x) => x.id), owner, revision: uid() },
-        own,
-      ))
-    )
-      throw new Error('編集中の変更があるため中止しました。');
-    conflict = null;
-    window.dispatchEvent(new Event('drive-data'));
+    await saveMerge(local, heads, merged.data);
   } catch (e) {
     notify('同期を確認', e.message);
   } finally {
     busy = false;
     if (panel.open) renderPanel();
   }
-  if (!conflict) setTimeout(run, 0);
+}
+// 閲覧用テキストは同期原本から一方向に生成する
+async function publishNotes(doc) {
+  const root = await getFolder();
+  const folders = await list(
+    `'${root}' in parents and trashed = false and appProperties has { key='syukatsuNotesFolder' and value='v1' }`,
+  );
+  let notesFolder = folders.sort((a, b) => a.id.localeCompare(b.id))[0]?.id;
+  if (!notesFolder) {
+    const created = await api('files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: '企業別ノート（閲覧用）',
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [root],
+        appProperties: { syukatsuNotesFolder: 'v1' },
+      }),
+    });
+    notesFolder = created.id;
+  }
+  const files = await list(
+    `'${notesFolder}' in parents and trashed = false and appProperties has { key='syukatsuCompanyNote' and value='v1' }`,
+  );
+  const active = new Set(doc.data.companies.map((c) => c.id));
+  for (const c of doc.data.companies) {
+    const text = companyNote(c, doc.data),
+      hash = Array.from(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
+      )
+        .map((x) => x.toString(16).padStart(2, '0'))
+        .join('');
+    const existing = files.filter((f) => f.appProperties?.companyId === c.id);
+    const metadata = {
+      name: noteName(c),
+      appProperties: {
+        syukatsuCompanyNote: 'v1',
+        companyId: c.id,
+        contentHash: hash,
+        state: 'active',
+      },
+    };
+    if (existing.length) {
+      for (const f of existing)
+        if (f.appProperties?.contentHash !== hash || f.name !== metadata.name)
+          await writeNote(f.id, metadata, text);
+    } else await writeNote(null, { ...metadata, parents: [notesFolder] }, text);
+  }
+  for (const f of files)
+    if (!active.has(f.appProperties?.companyId) && f.appProperties?.state !== 'deleted') {
+      await writeNote(
+        f.id,
+        { name: '[削除済み] ' + f.name, appProperties: { ...f.appProperties, state: 'deleted' } },
+        'この企業は就活OSから削除されました。\n過去の内容は同期履歴JSONに残っています。\nこのファイルは閲覧用で、編集してもアプリには反映されません。\n',
+      );
+    }
+}
+async function writeNote(id, metadata, text) {
+  const boundary = 'note_' + uid();
+  await api(
+    'https://www.googleapis.com/upload/drive/v3/files' +
+      (id ? '/' + encodeURIComponent(id) : '') +
+      '?uploadType=multipart',
+    {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+      body: new Blob([
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+        JSON.stringify({ ...metadata, mimeType: 'text/plain' }),
+        `\r\n--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n`,
+        text,
+        `\r\n--${boundary}--`,
+      ]),
+    },
+  );
 }
 async function run() {
   if (busy || !token) return;

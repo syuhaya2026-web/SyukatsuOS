@@ -19,7 +19,7 @@ python3 -m http.server 8765 --bind 127.0.0.1
 2. リポジトリの Settings → Pages で Deploy from a branch を選択します。
 3. main ブランチの / (root) を選択して保存し、表示された公開URLを開きます。
 
-すべて相対URLなので、リポジトリ名を含む公開パスに対応します。更新時には service-worker.js の CACHE 名を v2 などへ変更してください。公開作業・Google連携はこのMVPには含みません。
+すべて相対URLなので、リポジトリ名を含む公開パスに対応します。更新時には service-worker.js の CACHE 名を v2 などへ変更してください。Google Driveの任意連携は下記の手順で設定できます。
 
 ## 使い方
 
@@ -40,7 +40,7 @@ python3 -m http.server 8765 --bind 127.0.0.1
 | manifest.webmanifest / icon-\* | PWA設定とアイコン                              |
 | service-worker.js              | アプリ本体のキャッシュとオフライン起動         |
 
-IndexedDB `syukatsu-os`（version 1）:
+IndexedDB `syukatsu-os`（version 2）:
 
 - `companies`: id, name, currentStatusId（progress参照）, myPageUrl, companyUrl, notes, createdAt, updatedAt
 - `progress`: id, companyId, title, date, notes, attachmentIds（files参照）, createdAt, updatedAt
@@ -49,7 +49,7 @@ IndexedDB `syukatsu-os`（version 1）:
 
 複数ストアにまたがる保存は同一トランザクションで実行します。ファイルはUUIDで識別するため同名でも衝突しません。企業削除時は関連進捗・予定を削除します。添付解除や進捗・企業削除では共通filesの実体を保持します（将来の共有参照に備えた設計）。未参照ファイルの整理画面・共有ファイル選択・バックアップは今後の追加項目です。
 
-Google OAuth/APIは未実装です。イベントには将来用の googleCalendarEventId: null、syncStatus: local を保存します。同期済みイベントを編集した場合は pending にしますが、実際の同期処理はありません。
+Google Calendar APIは未実装です。イベントには将来用の googleCalendarEventId: null、syncStatus: local を保存します。同期済みイベントを編集した場合は pending にしますが、実際の同期処理はありません。
 
 ## 簡単な確認手順
 
@@ -80,3 +80,15 @@ Google OAuth/APIは未実装です。イベントには将来用の googleCalend
 ## 点検修正と起動時の接続案内
 
 2026-09-16：Drive入力検証・通信容量制限・CSP・同期中表示を改善。クライアントID設定後の起動時は再接続案内を表示します。Google認証はユーザー操作が必要です。ズーム抑止はブラウザが許可する範囲です。実Googleアカウント・iPhone実機は別途確認してください。
+
+## 項目ごとの同期と企業別ノート
+
+別企業・別項目の変更は共通履歴から自動で統合します。同じ項目の変更や削除と編集がぶつかった場合は、企業・項目・端末・候補を表示して残す内容を選択します。選択中や送信中の追加変更を検出し、古い内容で端末を置き換えません。
+
+Driveの「就活OS / 企業別ノート（閲覧用）」に、企業ごとの読みやすい `.txt` を作成・更新します。同期原本は履歴JSONです。ノートの直接編集は取り込まれません。詳細・制限は [GOOGLE-DRIVE.md](./GOOGLE-DRIVE.md) を参照してください。
+
+- `drive-sync.js`: Google認証・履歴保存・統合と競合画面・ノート更新
+- `merge.js`: 共通履歴と記録・項目単位の比較（ネットワーク非依存）
+- `company-notes.js`: 閲覧用テキストの組み立て
+- `data-validation.js`: 受信データ・参照・履歴の検証
+- `tests/merge.test.mjs`: マージ・削除・添付・履歴・ノートの確認。Node.js 22以降で `node --test tests/merge.test.mjs` を実行できます。アプリの利用にNode.jsは不要です。
