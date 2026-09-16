@@ -44,7 +44,7 @@ export function companyNote(company, data) {
     '',
     '---',
     `企業ID：${company.id}`,
-    '添付本体と復元用データは、就活OSフォルダの履歴JSONに保存されています。',
+    '添付本体は「添付データ」、全体の復元データは「全体バックアップ」に保存されています。',
     'このテキストだけではアプリ全体の復元はできません。',
   );
   return lines.join('\n') + '\n';

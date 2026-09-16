@@ -723,3 +723,38 @@ input::-webkit-date-and-time-value {
   display: flex;
   justify-content: flex-end;
 }
+
+/* 同期・全体バックアップの進行表示 */
+.sync-operation {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 100;
+  padding: 16px;
+  border-radius: 12px;
+  background: #314d39;
+  color: #f1f7f3;
+  box-shadow: 0 4px 24px #0008;
+  font-size: 14px;
+  max-width: 680px;
+  margin: auto;
+}
+.sync-operation[hidden] {
+  display: none;
+}
+.backup-panel {
+  margin: 20px 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.backup-panel .row {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13px;
+}
+.backup-panel button {
+  font-size: 12px;
+}
