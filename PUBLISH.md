@@ -50,4 +50,8 @@ README.md、PUBLISH.md、整形設定もソース管理に含めて構いませ�
 
 ## 現在の準備状況
 
-PWA設定、ホーム画面アイコン、オフライン対応、相対URL、コード整形、Git除外設定は準備済みです。GitHubリポジトリの作成・アップロード・公開はまだ行っていません。
+PWA設定、ホーム画面アイコン、オフライン対応、相対URL、コード整形、Git除外設定は準備済みです。GitHubリポジトリを作成し、mainブランチからのGitHub Pages公開を設定済みです。
+
+公開URL：https://syuhaya2026-web.github.io/SyukatsuOS/
+
+リポジトリ：https://github.com/syuhaya2026-web/SyukatsuOS
