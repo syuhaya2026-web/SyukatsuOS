@@ -1,5 +1,5 @@
 // アプリ本体のキャッシュ
-const CACHE = 'syukatsu-os-v4';
+const CACHE = 'syukatsu-os-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -37,6 +37,7 @@ self.addEventListener('activate', (event) => {
 // 通信とオフライン表示
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  url.hash = '';
   const assetURLs = ASSETS.map((path) => new URL(path, self.registration.scope).href);
   if (event.request.method !== 'GET' || !assetURLs.includes(url.href)) return;
   event.respondWith(
