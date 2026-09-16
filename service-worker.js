@@ -1,5 +1,5 @@
 // アプリ本体のキャッシュ
-const CACHE = 'syukatsu-os-v12';
+const CACHE = 'syukatsu-os-v13';
 const ASSETS = [
   './',
   './index.html',

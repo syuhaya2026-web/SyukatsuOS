@@ -15,6 +15,29 @@ export function fakeDrive({ ignoreConditions = false } = {}) {
   let hook = null;
   const error = (status) => Object.assign(new Error('HTTP ' + status), { status });
   const metadata = (f) => Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'body'));
+  const fromV2 = ({ title, properties, labels, ...rest }) => ({
+    ...rest,
+    ...(title !== undefined ? { name: title } : {}),
+    ...(properties
+      ? {
+          appProperties: Object.fromEntries(
+            properties.filter((p) => p.visibility === 'PRIVATE').map((p) => [p.key, p.value]),
+          ),
+        }
+      : {}),
+    ...(labels ? { trashed: !!labels.trashed } : {}),
+  });
+  const toV2 = ({ name, appProperties, trashed, ...rest }) => ({
+    ...rest,
+    title: name,
+    labels: { trashed: !!trashed },
+    properties: Object.entries(appProperties || {}).map(([key, value]) => ({
+      key,
+      value,
+      visibility: 'PRIVATE',
+    })),
+    etag: '"' + rest.version + '"',
+  });
   const mutate = (id, patch) => {
     const f = files.get(id);
     if (!f) throw error(404);
@@ -34,7 +57,8 @@ export function fakeDrive({ ignoreConditions = false } = {}) {
         boundary = options.headers['Content-Type'].split('boundary=')[1],
         parts = text.split('--' + boundary),
         body = (s) => s.slice(s.indexOf('\r\n\r\n') + 4).replace(/\r\n$/, '');
-      const meta = JSON.parse(body(parts[1])),
+      const rawMeta = JSON.parse(body(parts[1])),
+        meta = u.pathname.includes('/v2/') ? fromV2(rawMeta) : rawMeta,
         payload = meta.mimeType === 'text/plain' ? body(parts[2]) : JSON.parse(body(parts[2]));
       const id = method === 'POST' ? meta.id || 'f' + ++seq : u.pathname.split('/').pop();
       if (method === 'POST') {
@@ -79,9 +103,16 @@ export function fakeDrive({ ignoreConditions = false } = {}) {
       if (!f) throw error(404);
       if (method === 'PATCH') {
         if (!ignoreConditions && options.headers['If-Match'] !== `"${f.version}"`) throw error(412);
-        value = metadata(mutate(id, JSON.parse(options.body)));
+        value = metadata(
+          mutate(
+            id,
+            u.pathname.includes('/v2/')
+              ? fromV2(JSON.parse(options.body))
+              : JSON.parse(options.body),
+          ),
+        );
       } else value = u.searchParams.get('alt') === 'media' ? f.body : metadata(f);
-      tag = `"${files.get(id).version}"`;
+      if (u.pathname.includes('/v2/') && u.searchParams.get('alt') !== 'media') value = toV2(value);
     }
     return details ? { value: structuredClone(value), etag: tag } : structuredClone(value);
   };

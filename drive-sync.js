@@ -219,7 +219,7 @@ async function api(path, options = {}, details = false) {
   );
   if (
     url.origin !== 'https://www.googleapis.com' ||
-    !/^\/(?:upload\/)?drive\/v3\//.test(url.pathname)
+    !/^\/(?:upload\/)?drive\/v[23]\//.test(url.pathname)
   )
     throw new Error('許可されていない接続先です。');
   const response = await fetch(url.href, {

@@ -200,7 +200,8 @@ test('missing conditional metadata blocks writes before migration', async () => 
     store = new DriveStore(
       async (path, options, details) => {
         const r = await fake.api(path, options, details);
-        return details ? { ...r, etag: null } : r;
+        if (String(path).includes('/v2/')) delete r.etag;
+        return r;
       },
       'root',
       device,
@@ -231,4 +232,18 @@ test('backup reference cannot point at a non-backup file', async () => {
     () => store.readBackup({ fileId: r.control.value.files[0].fileId, hash: '0'.repeat(64) }),
     /バックアップ以外/,
   );
+});
+
+test('v2 JSON ETag works without response headers and keeps private markers', async () => {
+  const fake = fakeDrive(),
+    store = new DriveStore(fake.api, 'root', device);
+  assert.equal((await fake.api('files/root', {}, true)).etag, '');
+  await store.initialize(seed());
+  assert(fake.files.get('root').appProperties.syukatsuV2);
+  assert.equal(fake.files.get('root').appProperties.syukatsu, 'v1');
+  const remote = await store.load();
+  const data = structuredClone(remote.data);
+  data.companies[0].name = 'Updated';
+  await store.save(remote, data);
+  assert.equal((await store.load()).data.companies[0].name, 'Updated');
 });

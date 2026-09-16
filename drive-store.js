@@ -49,6 +49,24 @@ const revisionKey = (files) =>
     .map((f) => `${f.id}:${f.version}`)
     .sort()
     .join('|');
+// v2の更新も同じFile ETagで保護する。アプリ専用属性はPRIVATEのまま保持する。
+function v2Metadata(metadata) {
+  const { name, appProperties, trashed, ...rest } = metadata;
+  return {
+    ...rest,
+    ...(name !== undefined ? { title: name } : {}),
+    ...(appProperties
+      ? {
+          properties: Object.entries(appProperties).map(([key, value]) => ({
+            key,
+            value,
+            visibility: 'PRIVATE',
+          })),
+        }
+      : {}),
+    ...(trashed !== undefined ? { labels: { trashed } } : {}),
+  };
+}
 export class DriveStore {
   constructor(api, root, device, onProgress = () => {}) {
     this.api = api;
@@ -60,17 +78,30 @@ export class DriveStore {
   }
   async meta(id, allowTrashed = false) {
     check(safeId(id), 'DriveのファイルIDが不正です。');
-    const r = await this.api(`files/${id}?fields=id,name,appProperties,version,trashed`, {}, true);
+    // v3はブラウザから使えるETagを返さないため、JSONにetagを持つv2で取得する。
+    const v = await this.api(
+      `https://www.googleapis.com/drive/v2/files/${id}?fields=id,title,properties,version,labels/trashed,etag`,
+    );
     check(
-      r.etag && !r.etag.startsWith('W/'),
+      typeof v.etag === 'string' && v.etag.length > 0 && !v.etag.startsWith('W/'),
       '安全な上書きに必要な情報をDriveから取得できません。元のデータは残したまま処理を停止しました。',
     );
     check(
-      allowTrashed || !r.value.trashed,
+      allowTrashed || !v.labels?.trashed,
       '同期ファイルがゴミ箱に移動されています。Driveで元に戻してください。',
     );
-    return { ...r.value, etag: r.etag };
+    return {
+      id: v.id,
+      name: v.title,
+      version: v.version,
+      trashed: !!v.labels?.trashed,
+      appProperties: Object.fromEntries(
+        (v.properties || []).filter((p) => p.visibility === 'PRIVATE').map((p) => [p.key, p.value]),
+      ),
+      etag: v.etag,
+    };
   }
+
   async list(q) {
     let token,
       result = [];
@@ -111,18 +142,22 @@ export class DriveStore {
     const boundary = 'syukatsu_' + crypto.randomUUID();
     try {
       return await this.api(
-        'https://www.googleapis.com/upload/drive/v3/files' +
-          (etag ? '/' + id : '') +
-          '?uploadType=multipart',
+        (etag
+          ? 'https://www.googleapis.com/upload/drive/v2/files/' + id
+          : 'https://www.googleapis.com/upload/drive/v3/files') + '?uploadType=multipart',
         {
-          method: etag ? 'PATCH' : 'POST',
+          method: etag ? 'PUT' : 'POST',
           headers: {
             'Content-Type': 'multipart/related; boundary=' + boundary,
             ...(etag ? { 'If-Match': etag } : {}),
           },
           body: new Blob([
             `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
-            JSON.stringify({ ...metadata, ...(!etag ? { id } : {}), mimeType: 'application/json' }),
+            JSON.stringify(
+              etag
+                ? v2Metadata({ ...metadata, mimeType: 'application/json' })
+                : { ...metadata, id, mimeType: 'application/json' },
+            ),
             `\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
             text,
             `\r\n--${boundary}--`,
@@ -136,10 +171,10 @@ export class DriveStore {
   }
   async patch(id, value, etag) {
     try {
-      return await this.api('files/' + id, {
+      return await this.api('https://www.googleapis.com/drive/v2/files/' + id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'If-Match': etag },
-        body: JSON.stringify(value),
+        body: JSON.stringify(v2Metadata(value)),
       });
     } catch (e) {
       if (e.status === 412) throw new Changed();
