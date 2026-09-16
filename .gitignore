@@ -1,0 +1,15 @@
+# ローカル環境
+.DS_Store
+node_modules/
+.env
+.env.*
+!.env.example
+
+# 個人データ・バックアップ
+backups/
+exports/
+*.backup.json
+
+# 作業ファイル
+work/
+*.log
