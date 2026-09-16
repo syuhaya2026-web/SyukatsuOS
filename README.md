@@ -76,3 +76,7 @@ Google OAuth/APIは未実装です。イベントには将来用の googleCalend
 右上のDriveボタンから接続できます。本人によるGoogle OAuthクライアントの作成が必要です。[GOOGLE-DRIVE.md](./GOOGLE-DRIVE.md) の手順を参照してください。接続しない場合は従来どおり端末だけに保存します。
 
 同期情報はIndexedDB version 2の `sync` ストアに保持します。Google Calendar連携とは別機能です。添付込みの履歴JSONをDriveへ保存し、20MB上限・接続し直し・競合時の手動選択があります。実Googleアカウントでの動作確認は設定後に必要です。
+
+## 点検修正と起動時の接続案内
+
+2026-09-16：Drive入力検証・通信容量制限・CSP・同期中表示を改善。クライアントID設定後の起動時は再接続案内を表示します。Google認証はユーザー操作が必要です。ズーム抑止はブラウザが許可する範囲です。実Googleアカウント・iPhone実機は別途確認してください。

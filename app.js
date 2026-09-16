@@ -1,5 +1,5 @@
 import './drive-sync.js';
-import { all, write, put, remove, uid } from './db.js';
+import { snapshot, write, put, remove, uid } from './db.js';
 // 画面要素
 const app = document.querySelector('#app'),
   modal = document.querySelector('#modal'),
@@ -31,7 +31,9 @@ const dateLabel = (value) =>
 const safeURL = (value) => {
   try {
     const url = new URL(value);
-    return ['https:', 'http:'].includes(url.protocol) ? url.href : '';
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password
+      ? url.href
+      : '';
   } catch {
     return '';
   }
@@ -107,7 +109,8 @@ function toast(message) {
 }
 // 端末データの読み込み
 async function refresh() {
-  for (const name of ['companies', 'progress', 'events', 'files']) data[name] = await all(name);
+  const saved = await snapshot();
+  for (const name of ['companies', 'progress', 'events', 'files']) data[name] = saved[name];
   render();
 }
 // データの保存
@@ -118,7 +121,13 @@ async function commit(ops) {
 // Driveからのデータ反映
 window.addEventListener('drive-data', () => refresh().catch((e) => toast(e.message)));
 // 画面ルーティング
-const route = () => location.hash.slice(1).split('/').map(decodeURIComponent);
+const route = () => {
+  try {
+    return location.hash.slice(1).split('/').map(decodeURIComponent);
+  } catch {
+    return [];
+  }
+};
 function render() {
   const [id, section, progressId] = route(),
     c = data.companies.find((c) => c.id === id);
@@ -769,3 +778,8 @@ if ('serviceWorker' in navigator)
     .catch(() =>
       toast('オフライン機能を有効にできませんでした。HTTPSまたはlocalhostで開いてください。'),
     );
+
+// iOS Safariのジェスチャー拡大を抑止（OSの拡大機能は対象外）
+for (const eventName of ['gesturestart', 'gesturechange']) {
+  document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
+}

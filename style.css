@@ -594,3 +594,31 @@ input[type='checkbox'] {
 #drive-dialog input {
   font-size: 12px;
 }
+
+/* アプリ内のピンチ・ダブルタップ拡大の抑止 */
+html {
+  touch-action: pan-x pan-y;
+}
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+#drive-dialog input {
+  font-size: 16px;
+}
+.startup-connect {
+  display: grid;
+  gap: 12px;
+  text-align: center;
+  padding: 12px 0;
+}
+.startup-connect h2 {
+  font-size: 24px;
+}
+.startup-connect p {
+  margin: 4px 0;
+}
+.startup-connect .eyebrow {
+  margin-bottom: 8px;
+}

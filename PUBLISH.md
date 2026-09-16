@@ -21,6 +21,8 @@
 - style.css
 - app.js
 - db.js
+- drive-sync.js
+- data-validation.js
 - manifest.webmanifest
 - service-worker.js
 - icon.svg

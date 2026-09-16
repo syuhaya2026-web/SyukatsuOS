@@ -1,7 +1,11 @@
 import { snapshot, syncUpdate, stores, uid } from './db.js';
 // Google Drive接続・同期状態（アクセストークンはメモリのみ）
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const LIMIT = 20 * 1024 * 1024;
+import { validate, headsOf, readBoundedJSON, MAX_SNAPSHOT_BYTES } from './data-validation.js';
+export { validate, headsOf };
+const LIMIT = MAX_SNAPSHOT_BYTES;
+let scanBytes = 0,
+  authPending = false;
 let token = '',
   expiry = 0,
   owner = '',
@@ -22,12 +26,17 @@ const escape = (v) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
+let startMode = false;
 let status = '未接続',
   message = 'Google Driveに接続すると、編集後に自動保存します。';
 function notify(label, detail = '') {
   status = label;
   message = detail;
   button.textContent = 'Drive ' + label;
+  if (startMode && label === '同期済み') {
+    startMode = false;
+    panel.close();
+  }
   if (panel.open) renderPanel();
 }
 function loadGoogle() {
@@ -47,11 +56,16 @@ function loadGoogle() {
 }
 // 接続設定画面
 function renderPanel() {
-  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">記録・添付を自分のDriveの「就活OS」に保存します。接続中は変更後と30秒ごとに同期します。再起動・認証切れの後は「接続」が必要です。接続前の端末データも同期対象になります。</p>${conflict ? `<label>使用するデータ<select id="drive-choice"><option value="local">この端末のデータ</option>${conflict.heads.map((x) => `<option value="${escape(x.id)}">Drive：${escape(x.savedAt)} / ${x.data.companies.length}企業</option>`).join('')}</select></label><p class="note">両方に変更があります。選んだ内容で現在のデータ全体を置き換えます。選ばなかった内容もDriveに履歴として残します。</p><button id="drive-resolve">選んだ内容で統一する</button>` : ''}<div class="actions"><button id="drive-connect" ${token ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token ? 'disabled' : ''}>接続を解除</button></div><p class="muted">1回の同期は添付を含むJSONで20MBまで。履歴は自動削除しません。通信中にアプリを閉じると、次の接続まで未同期になります。</p>`;
+  if (startMode) {
+    renderStartup();
+    return;
+  }
+  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">記録・添付を自分のDriveの「就活OS」に保存します。接続中は変更後と30秒ごとに同期します。再起動・認証切れの後は「接続」が必要です。接続前の端末データも同期対象になります。</p>${conflict ? `<label>使用するデータ<select id="drive-choice"><option value="local">この端末のデータ</option>${conflict.heads.map((x) => `<option value="${escape(x.id)}">Drive：${escape(x.savedAt)} / ${x.data.companies.length}企業</option>`).join('')}</select></label><p class="note">両方に変更があります。選んだ内容で現在のデータ全体を置き換えます。選ばなかった内容もDriveに履歴として残します。</p><button id="drive-resolve">選んだ内容で統一する</button>` : ''}<div class="actions"><button id="drive-connect" ${token || busy || authPending ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token || busy ? 'disabled' : ''}>接続を解除</button></div><p class="muted">1回の同期は添付を含むJSONで20MBまで。履歴は自動削除しません。通信中にアプリを閉じると、次の接続まで未同期になります。</p>`;
   panel.querySelector('#drive-close').onclick = () => panel.close();
   panel.querySelector('#drive-connect').onclick = connect;
   panel.querySelector('#drive-now').onclick = () => run();
   panel.querySelector('#drive-disconnect').onclick = () => {
+    if (busy) return;
     token = '';
     expiry = 0;
     folder = '';
@@ -67,6 +81,7 @@ button.onclick = () => {
 };
 // Google OAuth（秘密鍵不要・アプリが作成したファイルだけの権限）
 function connect() {
+  if (busy || authPending || token) return;
   try {
     const id = panel.querySelector('#drive-client').value.trim();
     if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(id))
@@ -74,12 +89,15 @@ function connect() {
     if (!window.google?.accounts?.oauth2)
       throw new Error('Googleの読み込み中です。少し待って接続を押してください。');
     localStorage.setItem('drive-client-id', id);
+    authPending = true;
+    notify('接続中', 'Googleの確認画面を操作してください。');
     google.accounts.oauth2
       .initTokenClient({
         client_id: id,
         scope: SCOPE,
         callback: async (result) => {
           if (result.error) {
+            authPending = false;
             notify('接続エラー', result.error);
             return;
           }
@@ -87,7 +105,9 @@ function connect() {
           expiry = Date.now() + Number(result.expires_in) * 1000 - 60000;
           try {
             const info = await api('about?fields=user(permissionId)');
-            owner = info.user.permissionId;
+            owner = info.user?.permissionId;
+            if (typeof owner !== 'string' || !owner)
+              throw new Error('Googleアカウントを確認できませんでした。');
             const local = await snapshot();
             if (local.state.owner && local.state.owner !== owner) {
               token = '';
@@ -98,14 +118,24 @@ function connect() {
             folder = '';
             await run();
           } catch (e) {
+            token = '';
+            expiry = 0;
+            owner = '';
+            folder = '';
             notify('接続エラー', e.message);
+          } finally {
+            authPending = false;
+            if (panel.open) renderPanel();
           }
         },
-        error_callback: () =>
-          notify('未接続', 'ログインが完了していません。もう一度接続してください。'),
+        error_callback: () => {
+          authPending = false;
+          notify('未接続', 'ログインが完了していません。もう一度接続してください。');
+        },
       })
       .requestAccessToken({ prompt: 'select_account' });
   } catch (e) {
+    authPending = false;
     notify('設定を確認', e.message);
   }
 }
@@ -115,14 +145,22 @@ async function api(path, options = {}) {
     token = '';
     throw new Error('Googleに再接続してください。端末の変更は残っています。');
   }
-  const response = await fetch(
+  const url = new URL(
     path.startsWith('https://') ? path : 'https://www.googleapis.com/drive/v3/' + path,
-    {
-      ...options,
-      headers: { Authorization: 'Bearer ' + token, ...options.headers },
-      signal: AbortSignal.timeout(60000),
-    },
   );
+  if (
+    url.origin !== 'https://www.googleapis.com' ||
+    !/^\/(?:upload\/)?drive\/v3\//.test(url.pathname)
+  )
+    throw new Error('許可されていない接続先です。');
+  const response = await fetch(url.href, {
+    ...options,
+    headers: { Authorization: 'Bearer ' + token, ...options.headers },
+    signal: AbortSignal.timeout(60000),
+    redirect: 'error',
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
+  });
   if (!response.ok) {
     if (response.status === 401) token = '';
     throw new Error(
@@ -131,7 +169,15 @@ async function api(path, options = {}) {
         : `Driveとの通信に失敗しました（${response.status}）。端末の変更は残っています。`,
     );
   }
-  return response.json();
+  const parsed = await readBoundedJSON(response);
+  if (url.searchParams.get('alt') === 'media') {
+    scanBytes += parsed.size;
+    if (scanBytes > 100 * 1024 * 1024)
+      throw new Error(
+        '履歴の読込が100MBを超えました。同期を停止します。履歴は削除せず整理対応を依頼してください。',
+      );
+  }
+  return parsed.value;
 }
 async function list(q) {
   let result = [],
@@ -145,6 +191,10 @@ async function list(q) {
     if (pageToken) params.set('pageToken', pageToken);
     const page = await api('files?' + params);
     result.push(...page.files);
+    if (result.length > 500)
+      throw new Error(
+        'Drive履歴が500件を超えています。同期を停止します。履歴の整理対応が必要です。',
+      );
     pageToken = page.nextPageToken;
   } while (pageToken);
   return result;
@@ -155,7 +205,9 @@ async function getFolder() {
     "trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='syukatsu' and value='v1' }",
   );
   if (folders.length > 1)
-    throw new Error('就活OSフォルダが複数見つかりました。Drive上で統合するまで同期を停止します。');
+    throw new Error(
+      '就活OSフォルダが複数見つかりました。手動削除せず、整理対応を依頼してください。同期を停止します。',
+    );
   if (folders.length) return (folder = folders[0].id);
   const f = await api('files', {
     method: 'POST',
@@ -187,46 +239,6 @@ async function encode(local) {
   }
   return data;
 }
-export function validate(doc) {
-  if (
-    doc?.format !== 'syukatsu-drive' ||
-    doc.version !== 1 ||
-    typeof doc.id !== 'string' ||
-    !Array.isArray(doc.parents) ||
-    !doc.parents.every((x) => typeof x === 'string')
-  )
-    throw new Error('対応していないDriveデータです。');
-  for (const name of stores) {
-    if (!Array.isArray(doc.data?.[name])) throw new Error('Driveデータが不正です。');
-    const ids = new Set();
-    for (const row of doc.data[name]) {
-      if (!row || typeof row.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(row.id) || ids.has(row.id))
-        throw new Error('DriveデータのIDが不正です。');
-      ids.add(row.id);
-    }
-  }
-  const companies = new Set(doc.data.companies.map((x) => x.id)),
-    files = new Set(doc.data.files.map((x) => x.id));
-  for (const c of doc.data.companies)
-    if (typeof c.name !== 'string' || typeof c.updatedAt !== 'string')
-      throw new Error('企業データが不正です。');
-  for (const p of doc.data.progress)
-    if (
-      !companies.has(p.companyId) ||
-      typeof p.title !== 'string' ||
-      typeof p.date !== 'string' ||
-      !Array.isArray(p.attachmentIds) ||
-      p.attachmentIds.some((id) => !files.has(id))
-    )
-      throw new Error('進捗データが不正です。');
-  for (const e of doc.data.events)
-    if (!companies.has(e.companyId) || typeof e.title !== 'string' || typeof e.date !== 'string')
-      throw new Error('予定データが不正です。');
-  for (const f of doc.data.files)
-    if (typeof f.base64 !== 'string' || typeof f.name !== 'string' || typeof f.type !== 'string')
-      throw new Error('添付データが不正です。');
-  return doc;
-}
 function decode(doc) {
   validate(doc);
   const data = structuredClone(doc.data);
@@ -238,12 +250,8 @@ function decode(doc) {
   }
   return data;
 }
-export function headsOf(docs) {
-  const map = new Map(docs.map((x) => [x.id, x]));
-  const parents = new Set(docs.flatMap((x) => x.parents));
-  return [...map.values()].filter((x) => !parents.has(x.id));
-}
 async function readHeads() {
+  scanBytes = 0;
   const id = await getFolder();
   const files = await list(
     `'${id}' in parents and trashed = false and appProperties has { key='syukatsuSnapshot' and value='v1' }`,
@@ -254,6 +262,7 @@ async function readHeads() {
   return headsOf(docs);
 }
 async function upload(doc) {
+  validate(doc);
   const body = JSON.stringify(doc);
   if (new Blob([body]).size > LIMIT)
     throw new Error('同期データが20MBを超えています。端末データは保存済みです。');
@@ -287,7 +296,7 @@ async function perform() {
   const dirty = local.state.dirty || (!local.state.owner && !empty);
   if (heads.length === 1 && heads[0].id === local.state.revision) {
     await syncUpdate(local.state.revision, { base: [heads[0].id], dirty: false, owner });
-    notify('同期済み', '前回の保存を確認しました。');
+    await reportCompletion();
     return;
   }
   if ((heads.length > 1 && !same) || (!same && heads.length && dirty)) {
@@ -340,10 +349,24 @@ async function perform() {
       return;
     }
   } else await syncUpdate(local.state.revision, { owner });
+  await reportCompletion();
+}
+// 保存中の追加編集を「同期済み」と誤表示しない
+async function reportCompletion() {
+  const latest = await snapshot();
+  if (latest.state.dirty) {
+    schedule();
+    return;
+  }
+  conflict = null;
   notify('同期済み', new Date().toLocaleTimeString('ja-JP') + ' に確認しました。');
 }
 // 競合解消も新しい履歴として残す
 async function resolveConflict() {
+  if (navigator.locks) return navigator.locks.request('syukatsu-drive', resolveConflictLocked);
+  return resolveConflictLocked();
+}
+async function resolveConflictLocked() {
   if (busy || !conflict) return;
   const choice = panel.querySelector('#drive-choice').value;
   if (!confirm('選んだ内容で現在のデータ全体を置き換えます。続けますか？')) return;
@@ -377,7 +400,16 @@ async function resolveConflict() {
         data: await encode(local),
       };
       await upload(rescue);
+      const before = heads;
       heads = await readHeads();
+      const expected = new Set([
+        ...before.map((x) => x.id).filter((x) => !rescue.parents.includes(x)),
+        rescue.id,
+      ]);
+      if (heads.length !== expected.size || heads.some((x) => !expected.has(x.id)))
+        throw new Error(
+          '競合確認中に別端末が更新しました。今すぐ同期して選び直してください。端末データは変更していません。',
+        );
     }
     if (
       !(await syncUpdate(
@@ -395,7 +427,7 @@ async function resolveConflict() {
     busy = false;
     if (panel.open) renderPanel();
   }
-  if (!conflict) run();
+  if (!conflict) setTimeout(run, 0);
 }
 async function run() {
   if (busy || !token) return;
@@ -428,3 +460,33 @@ document.addEventListener('visibilitychange', () => {
 setInterval(() => {
   if (document.visibilityState === 'visible') run();
 }, 30000);
+
+// 起動時の再接続案内（認証操作はユーザーのタップで開始）
+function renderStartup() {
+  const configured = localStorage.getItem('drive-client-id') || '';
+  panel.innerHTML = `<div class="startup-connect"><p class="eyebrow">就活OS</p><h2>最新の記録で始める</h2><p>Google Driveに接続して、別の端末の変更を読み込みます。</p><input id="drive-client" type="hidden" value="${escape(configured)}"><p class="muted">${escape(message || 'Googleへの接続を準備しています。')}</p><button class="primary" id="startup-connect" ${busy || authPending || !window.google?.accounts?.oauth2 ? 'disabled' : ''}>Googleで続ける</button><button id="startup-local">端末の記録で使う</button><button class="back" id="startup-settings">接続設定</button><p class="muted">自動接続にはGoogleの許可が必要です。端末の記録で使う場合、Driveとの同期は行いません。</p></div>`;
+  panel.querySelector('#startup-connect').onclick = connect;
+  panel.querySelector('#startup-local').onclick = () => {
+    startMode = false;
+    panel.close();
+    notify('未接続', '端末の記録で使用中です。同期するにはDriveに接続してください。');
+  };
+  panel.querySelector('#startup-settings').onclick = () => {
+    startMode = false;
+    renderPanel();
+  };
+}
+panel.addEventListener('cancel', () => {
+  startMode = false;
+});
+queueMicrotask(() => {
+  if (!localStorage.getItem('drive-client-id')) return;
+  startMode = true;
+  renderPanel();
+  panel.showModal();
+  loadGoogle()
+    .then(() => {
+      if (startMode) notify('未接続', '「Googleで続ける」を押してください。');
+    })
+    .catch((e) => notify('未接続', e.message));
+});
