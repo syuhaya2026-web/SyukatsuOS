@@ -1,6 +1,6 @@
 // 企業単位の保存・条件付き更新・週次バックアップ。認証と画面は呼び出し側が担当する。
-import { stable } from './merge.js';
-import { validate, MAX_SNAPSHOT_BYTES } from './data-validation.js';
+import { stable, commonBase, mergeRecords } from './merge.js';
+import { validate, headsOf, MAX_SNAPSHOT_BYTES } from './data-validation.js';
 export const WEEK = 7 * 24 * 60 * 60 * 1000;
 export const RETENTION = 30 * 24 * 60 * 60 * 1000;
 const empty = () => ({ companies: [], progress: [], events: [], files: [] });
@@ -124,12 +124,13 @@ export class DriveStore {
       `'${folder}' in parents and trashed = false and appProperties has { key='${key}' and value='v2' }`,
     );
   }
-  async legacyKey() {
-    return revisionKey(
-      await this.list(
-        `'${this.root}' in parents and trashed = false and appProperties has { key='syukatsuSnapshot' and value='v1' }`,
-      ),
+  async legacyFiles() {
+    return this.list(
+      `'${this.root}' in parents and trashed = false and appProperties has { key='syukatsuSnapshot' and value='v1' }`,
     );
+  }
+  async legacyKey() {
+    return revisionKey(await this.legacyFiles());
   }
   async generated() {
     const r = await this.api('files/generateIds?count=1&space=drive&type=files');
@@ -390,6 +391,7 @@ export class DriveStore {
       control.backups.push(await this.createBackup(data, control, 'migration'));
       await checkpoint();
     } else await this.readBackup(control.backups[0]);
+    control.legacyKey = legacyKey;
     delete control.probe;
     const current = await this.meta(id);
     await this.jsonWrite(id, control, { name: '同期管理.json' }, current.etag);
@@ -430,17 +432,23 @@ export class DriveStore {
     ]);
     return { companies, files, key: revisionKey([...companies, ...files]) };
   }
-  async load() {
+  async load({ allowLegacy = false } = {}) {
     const control = await this.control();
     check(control, '新しい保存先が見つかりません。');
     check(
-      (await this.legacyKey()) === control.value.legacyKey,
+      allowLegacy || (await this.legacyKey()) === control.value.legacyKey,
       '旧版のアプリから更新が届いています。データ保護のため停止しました。全端末を更新し、旧履歴を消さずに移行対応を依頼してください。',
     );
     const scan = await this.scan(control.value),
       data = empty(),
       records = new Map(),
       devices = {};
+    // 取り込み前の実体も残す。旧クライアントの遅れた書込を見落とさない。
+    for (const retired of control.value.retiredCompanies || [])
+      check(
+        scan.companies.some((f) => f.id === retired.fileId && f.version === retired.version),
+        '取り込み前の企業ファイルに追加更新が届きました。元データを残して停止しています。両端末を更新して確認を依頼してください。',
+      );
     for (const entry of control.value.files) {
       const listed = scan.files.find((f) => f.id === entry.fileId);
       check(listed, '添付データの一部が見つかりません。Driveのゴミ箱を確認してください。');
@@ -496,9 +504,200 @@ export class DriveStore {
     if (end.key !== scan.key || endControl.etag !== control.meta.etag) throw new Changed();
     return { data, control, records, devices, signature: control.meta.etag + '|' + scan.key };
   }
+  // 旧版から遅れて届いた履歴を、企業別データと共通の履歴から比較する。
+  sourceKey(remote) {
+    return (
+      remote.control.meta.etag +
+      '|' +
+      [...remote.records]
+        .map(([id, r]) => id + ':' + r.meta.version)
+        .sort()
+        .join('|')
+    );
+  }
+  async prepareLegacy(remote) {
+    const listed = await this.legacyFiles(),
+      key = revisionKey(listed);
+    if (key === remote.control.value.legacyKey) return null;
+    const docs = [],
+      byFile = new Map();
+    for (const f of listed) {
+      const r = await this.read(f.id, f.version);
+      const doc = validate(r.value);
+      const duplicate = docs.find((d) => d.id === doc.id);
+      check(
+        !duplicate || stable(duplicate) === stable(doc),
+        '同じIDで異なる旧履歴があります。元データを残して停止しました。',
+      );
+      if (!duplicate) docs.push(doc);
+      byFile.set(f.id, { doc, version: r.meta.version });
+    }
+    const ids = docs.map((d) => d.id);
+    check(
+      new Set(ids).size === ids.length,
+      '旧履歴のIDが重複しています。元データを残して停止しました。',
+    );
+    const acknowledged = (remote.control.value.legacyKey || '')
+      .split('|')
+      .filter(Boolean)
+      .map((entry) => {
+        const [id, version] = entry.split(':'),
+          found = byFile.get(id);
+        check(
+          found && found.version === version,
+          '取り込み済みの旧履歴が変更・削除されています。元データを残して停止しました。',
+        );
+        return found.doc;
+      });
+    let context;
+    const saved = remote.control.value.legacyContext;
+    if (saved) {
+      const record = await this.read(saved.fileId);
+      check(
+        (await digest(record.value)) === saved.hash &&
+          record.value.format === 'syukatsu-legacy-context' &&
+          Array.isArray(record.value.docs),
+        '旧履歴の取り込み基準を確認できません。元データは残しています。',
+      );
+      context = record.value.docs.map(validate);
+    } else {
+      const initial = remote.control.value.backups.find((b) => b.reason === 'migration');
+      check(initial, '初回移行のバックアップが見つかりません。推測で上書きせず停止しました。');
+      const seed = await this.readBackup(initial);
+      check(
+        (await digest(seed.data)) === remote.control.value.seedHash,
+        '初回移行の基準が一致しません。元データを残して停止しました。',
+      );
+      context = [{ ...seed, parents: headsOf(acknowledged).map((d) => d.id) }];
+    }
+    const current = {
+      ...documentOf(remote.data, { id: 'remote', name: 'Drive（企業別データ）' }),
+      parents: [context.at(-1).id],
+    };
+    const all = [...docs, ...context, current];
+    check(new Set(all.map((d) => d.id)).size === all.length, '取り込み履歴のIDが重複しています。');
+    const heads = headsOf(all),
+      base = commonBase(all, heads);
+    if ((await this.legacyKey()) !== key) throw new Changed();
+    return {
+      key,
+      remote,
+      heads,
+      base,
+      context: [...context, current],
+      signature: this.sourceKey(remote) + '|' + key,
+    };
+  }
+  // 既存の企業ファイルは上書きしない。候補一式を検証後、一覧だけ条件付きで切り替える。
+  async recoverLegacy(plan, choices = {}) {
+    const merged = mergeRecords(plan.base, plan.heads, choices);
+    check(
+      !merged.conflicts.length,
+      '旧履歴と企業データで競合があります。残す内容を選んでください。',
+    );
+    const data = merged.data,
+      remote = plan.remote;
+    // 未参照の添付も保持する。
+    const fileIds = new Set(data.files.map((f) => f.id));
+    data.files.push(...remote.data.files.filter((f) => !fileIds.has(f.id)));
+    validate(documentOf(data, this.device));
+    const unchanged = async () => {
+      const fresh = await this.load({ allowLegacy: true });
+      if (this.sourceKey(fresh) !== this.sourceKey(remote) || (await this.legacyKey()) !== plan.key)
+        throw new Changed();
+      return fresh;
+    };
+    await unchanged();
+    this.onProgress(
+      '旧記録を取り込み中',
+      '元の記録を残して企業別データを作成しています。完了までアプリを閉じないでください。',
+    );
+    const control = remote.control.value;
+    const safety = await this.createBackup(remote.data, control, 'before-legacy-recovery');
+    const companies = [],
+      files = [];
+    for (const f of data.files) {
+      const existing = control.files.find((x) => x.id === f.id);
+      if (existing) {
+        check(
+          stable(remote.data.files.find((x) => x.id === f.id)) === stable(f),
+          '添付の内容が競合しています。元ファイルを残して停止しました。',
+        );
+        files.push(existing);
+      } else {
+        const fileId = await this.generated();
+        const payload = { format: 'syukatsu-file', version: 2, file: f };
+        await this.jsonWrite(fileId, payload, {
+          name: fileName(f.name) + '__' + f.id + '.json',
+          parents: [control.filesFolder],
+          appProperties: { syukatsuAttachment: 'v2' },
+        });
+        check(
+          stable((await this.read(fileId)).value) === stable(payload),
+          '添付の保存確認に失敗しました。元データは残しています。',
+        );
+        files.push({ id: f.id, fileId });
+      }
+    }
+    for (const c of data.companies) {
+      const fileId = await this.generated(),
+        payload = this.bundle(data, c.id);
+      await this.jsonWrite(fileId, payload, {
+        name: fileName(c.name) + '__' + c.id + '.json',
+        parents: [control.companiesFolder],
+        appProperties: { syukatsuCompany: 'v2' },
+      });
+      check(
+        stable((await this.read(fileId)).value) === stable(payload),
+        '企業データの保存確認に失敗しました。元データは残しています。',
+      );
+      companies.push({ id: c.id, fileId });
+    }
+    const anchor = { ...documentOf(data, this.device), parents: plan.heads.map((d) => d.id) };
+    validate(anchor);
+    const context = {
+      format: 'syukatsu-legacy-context',
+      version: 1,
+      docs: [...plan.context, anchor],
+    };
+    const fileId = await this.generated(),
+      hash = await digest(context);
+    await this.jsonWrite(fileId, context, {
+      name: '旧記録取り込み基準_' + fileId + '.json',
+      parents: [this.root],
+      appProperties: { syukatsuLegacyContext: 'v2' },
+    });
+    check(
+      (await digest((await this.read(fileId)).value)) === hash,
+      '取り込み基準の保存確認に失敗しました。',
+    );
+    const fresh = await unchanged();
+    await this.updateControl(fresh.control, {
+      ...control,
+      companies,
+      files,
+      legacyKey: plan.key,
+      legacyContext: { fileId, hash },
+      retiredCompanies: [
+        ...(control.retiredCompanies || []),
+        ...control.companies.map((x) => ({
+          fileId: x.fileId,
+          version: remote.records.get(x.fileId).meta.version,
+        })),
+      ],
+      backups: [...control.backups, safety],
+    });
+    return this.load();
+  }
   // 送信済みの別項目は保持。途中で412になった場合は呼出元が全体を読み直す。
   async save(remote, data) {
     validate(documentOf(data, this.device));
+    const fresh = await this.control();
+    if (
+      fresh.meta.etag !== remote.control.meta.etag ||
+      (await this.legacyKey()) !== remote.control.value.legacyKey
+    )
+      throw new Changed();
     let control = remote.control;
     for (const file of data.files) {
       const old = remote.data.files.find((x) => x.id === file.id);

@@ -335,6 +335,7 @@ async function readHeads() {
   return headsOf(docs);
 }
 async function upload(doc) {
+  if (await (await storeV2()).control()) throw new Changed();
   validate(doc);
   const body = JSON.stringify(doc);
   if (new Blob([body]).size > LIMIT)
@@ -543,6 +544,7 @@ async function resolveConflict() {
 }
 async function resolveConflictLocked() {
   if (busy || !conflict) return;
+  if (conflict.mode === 'legacy-recovery') return resolveLegacyRecovery();
   if (conflict.mode === 'v2') return resolveV2();
   if (conflict.pending.some((item) => !Object.hasOwn(conflict.choices, item.key))) {
     notify('競合あり', '各項目について、残す内容を選んでください。');
@@ -751,8 +753,17 @@ async function perform() {
   const local = await snapshot();
   if (local.state.owner && local.state.owner !== owner)
     throw new Error('別のGoogleアカウントでは同期できません。');
-  const remote = await store.load(),
-    base = await localBase(local),
+  let remote = await store.load({ allowLegacy: true });
+  const recovery = await store.prepareLegacy(remote);
+  if (recovery) {
+    const merged = mergeRecords(recovery.base, recovery.heads);
+    if (merged.conflicts.length) {
+      showLegacyRecovery(local, recovery);
+      return;
+    }
+    remote = await store.recoverLegacy(recovery);
+  }
+  const base = await localBase(local),
     encoded = await encode(local),
     heads = v2Heads(local, remote, encoded);
   backupEntries = remote.control.value.backups;
@@ -838,6 +849,40 @@ async function commitV2(local, remote, data, encoded) {
       .filter(Boolean)
       .join('\n'),
   );
+}
+// 旧記録との競合選択。端末の未同期データには触れず、Drive側の取り込み後に通常同期する。
+function showLegacyRecovery(local, plan, choices = {}) {
+  showV2Conflict(local, { signature: plan.signature }, plan.base, plan.heads, choices);
+  conflict.mode = 'legacy-recovery';
+  conflict.plan = plan;
+}
+async function resolveLegacyRecovery() {
+  if (conflict.pending.some((item) => !Object.hasOwn(conflict.choices, item.key))) {
+    notify('競合あり', '各項目について残す内容を選んでください。');
+    return;
+  }
+  busy = true;
+  try {
+    scanBytes = 0;
+    const store = await storeV2();
+    await store.recoverLegacy(conflict.plan, conflict.choices);
+    conflict = null;
+    await perform();
+  } catch (e) {
+    notify('同期を確認', e.message);
+    if (e.retry) {
+      conflict = null;
+      queued = true;
+    }
+  } finally {
+    busy = false;
+    operationBanner.hidden = true;
+    if (panel.open) renderPanel();
+    if (queued) {
+      queued = false;
+      setTimeout(run, 500);
+    }
+  }
 }
 async function resolveV2() {
   if (conflict.pending.some((item) => !Object.hasOwn(conflict.choices, item.key))) {
