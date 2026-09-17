@@ -68,11 +68,12 @@ function v2Metadata(metadata) {
   };
 }
 export class DriveStore {
-  constructor(api, root, device, onProgress = () => {}) {
+  constructor(api, root, device, onProgress = () => {}, onRead = () => {}) {
     this.api = api;
     this.root = root;
     this.device = device;
     this.onProgress = onProgress;
+    this.onRead = onRead;
     this.cache = new Map();
     this.controlId = '';
   }
@@ -449,6 +450,30 @@ export class DriveStore {
         scan.companies.some((f) => f.id === retired.fileId && f.version === retired.version),
         '取り込み前の企業ファイルに追加更新が届きました。元データを残して停止しています。両端末を更新して確認を依頼してください。',
       );
+    // 更新された実体だけを最大4件ずつ取得。失敗時も全通信の終了を待ってから中断する。
+    const listedById = new Map([...scan.files, ...scan.companies].map((f) => [f.id, f]));
+    const pending = [...control.value.files, ...control.value.companies].filter((entry) => {
+      const listed = listedById.get(entry.fileId);
+      check(listed, '同期データの一部が見つかりません。Driveのゴミ箱を確認してください。');
+      return this.cache.get(entry.fileId)?.meta.version !== listed.version;
+    });
+    let cursor = 0,
+      completed = 0,
+      failure;
+    if (pending.length) this.onRead(0, pending.length);
+    const workers = Array.from({ length: Math.min(4, pending.length) }, async () => {
+      while (!failure && cursor < pending.length) {
+        const entry = pending[cursor++];
+        try {
+          await this.read(entry.fileId, listedById.get(entry.fileId).version);
+          this.onRead(++completed, pending.length);
+        } catch (e) {
+          failure ||= e;
+        }
+      }
+    });
+    await Promise.all(workers);
+    if (failure) throw failure;
     for (const entry of control.value.files) {
       const listed = scan.files.find((f) => f.id === entry.fileId);
       check(listed, '添付データの一部が見つかりません。Driveのゴミ箱を確認してください。');

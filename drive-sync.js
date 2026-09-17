@@ -664,7 +664,13 @@ window.addEventListener('beforeunload', (e) => {
 });
 const blank = () => ({ companies: [], progress: [], events: [], files: [] });
 async function storeV2() {
-  if (!backend) backend = new DriveStore(api, await getFolder(), thisDevice(), operation);
+  if (!backend)
+    backend = new DriveStore(api, await getFolder(), thisDevice(), operation, (done, total) =>
+      notify(
+        '読み込み中',
+        `Driveの変更を確認しています（${done} / ${total}件）。端末の編集内容と比較してから送信します。`,
+      ),
+    );
   backend.device = thisDevice();
   return backend;
 }
@@ -785,6 +791,7 @@ async function commitV2(local, remote, data, encoded) {
   const replacement = decode(documentOf(data, thisDevice()));
   if ((await snapshot()).state.revision !== local.state.revision) throw new Changed();
   const store = await storeV2();
+  notify('送信中', '端末に保存した変更をDriveへ反映しています。');
   await store.save(remote, data);
   if (document.querySelector('#modal').open) {
     notify('受信待ち', '編集中の画面を閉じると同期した内容を適用します。');
@@ -811,12 +818,14 @@ async function commitV2(local, remote, data, encoded) {
   conflict = null;
   if (stable(encoded) !== stable(data)) window.dispatchEvent(new Event('drive-data'));
   scanBytes = 0;
+  notify('保存確認中', 'Driveへの保存結果を確認しています。');
   const confirmed = await store.load();
   if (stable(confirmed.data) !== stable(data)) {
     queued = true;
     return;
   }
   // 旧版同様の閲覧用ノートも、変更された企業だけ更新する。
+  notify('仕上げ中', '変更はDriveへ保存済みです。閲覧用ノートとバックアップを確認しています。');
   let noteWarning = '';
   try {
     await publishNotes(documentOf(confirmed.data, thisDevice()));
@@ -1041,7 +1050,12 @@ async function run() {
 }
 function schedule() {
   clearTimeout(timer);
-  notify(token ? '未同期' : '未接続', '端末には保存済みです。Driveへ送信します。');
+  notify(
+    token ? '未同期' : '未接続',
+    token
+      ? '端末には保存済みです。Driveへ送信します。'
+      : '変更は端末に保存済みです。Googleに接続するとDriveへ同期します。',
+  );
   timer = setTimeout(run, 0);
 }
 window.addEventListener('local-change', schedule);
@@ -1050,7 +1064,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') run();
 });
 setInterval(() => {
-  if (document.visibilityState === 'visible') run();
+  if (document.visibilityState === 'visible' && !busy && !authPending) run();
 }, 10000);
 
 // 起動時の再接続案内（認証操作はユーザーのタップで開始）
