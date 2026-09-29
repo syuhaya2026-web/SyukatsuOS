@@ -73,6 +73,17 @@ document.addEventListener(
   },
   true,
 );
+// 企業ごとの選考区分・結果
+const selectionStatuses = {
+  早期選考: 'early',
+  本選考: 'regular',
+  合格: 'passed',
+  不合格: 'failed',
+};
+const selectionBadge = (c) =>
+  Object.hasOwn(selectionStatuses, c.selectionStatus || '')
+    ? `<span class="selection-status ${selectionStatuses[c.selectionStatus]}">${esc(c.selectionStatus)}</span>`
+    : '';
 // 現在の選考ステータス
 const current = (c) => data.progress.find((p) => p.id === c.currentStatusId)?.title || '未設定';
 const status = (c) => {
@@ -324,8 +335,9 @@ function renderCards() {
             <h2 class="company-name">${companyMark(c)}<span>${esc(c.name)}</span></h2>
             <div class="next">
               ${e ? `${dateLabel(e.date)}　${esc(e.title)}` : '次回の予定はまだありません'}
-            </div></button
-          >${link(c.myPageUrl, 'My Page')}
+            </div>
+          </button>
+          <div class="card-links">${link(c.myPageUrl, 'My Page')}${selectionBadge(c)}</div>
         </article>`;
       })
       .join('') ||
@@ -346,6 +358,7 @@ function renderDetail(c) {
     <div class="detail-header">
       ${status(c)}
       <h1 class="company-name">${companyMark(c)}<span>${esc(c.name)}</span></h1>
+      ${selectionBadge(c)}
       <div class="row wrap" style="justify-content:flex-start">
         ${link(c.myPageUrl, 'My Page')}${link(c.companyUrl, '企業サイト')}
       </div>
@@ -460,8 +473,19 @@ function companyForm(c) {
   show(
     heading(c ? '企業を編集' : '企業を追加') +
       /* HTML */ `<form class="form">
-        ${field('企業名', 'name', c?.name, 'text', true)}<label
-          >現在のステータス<select name="currentStatusId">
+        ${field('企業名', 'name', c?.name, 'text', true)}
+        <label
+          >選考ステータス<select name="selectionStatus">
+            <option value="">未設定</option>
+            ${Object.keys(selectionStatuses)
+              .map(
+                (value) =>
+                  `<option value="${value}" ${c?.selectionStatus === value ? 'selected' : ''}>${value}</option>`,
+              )
+              .join('')}
+          </select></label
+        ><label
+          >タイムラインの現在のステータス<select name="currentStatusId">
             <option value="">未設定</option>
             ${data.progress
               .filter((p) => p.companyId === c?.id)

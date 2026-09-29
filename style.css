@@ -422,7 +422,7 @@ textarea {
     grid-template-columns: 1fr;
     gap: 12px;
   }
-  .card > .button {
+  .card-links > .button {
     justify-self: start;
     font-size: 12px;
     padding: 7px 11px;
@@ -757,4 +757,34 @@ input::-webkit-date-and-time-value {
 }
 .backup-panel button {
   font-size: 12px;
+}
+
+/* 企業の選考区分・結果 */
+.card-links {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.selection-status {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.selection-status.early {
+  color: #c7acf0;
+}
+.selection-status.regular {
+  color: #91b3ee;
+}
+.selection-status.passed {
+  color: #9cc5ad;
+}
+.selection-status.failed {
+  color: #ee9292;
+}
+.detail-header > .selection-status {
+  margin: 0 0 18px;
 }

@@ -59,6 +59,7 @@ const FIELD_LABELS = {
   title: 'タイトル',
   date: '日時',
   currentStatusId: '現在のステータス',
+  selectionStatus: '選考ステータス',
   myPageUrl: 'My Page URL',
   companyUrl: '企業URL',
   logoUrl: 'ロゴURL',
