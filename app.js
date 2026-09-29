@@ -475,7 +475,7 @@ function companyForm(c) {
       /* HTML */ `<form class="form">
         ${field('企業名', 'name', c?.name, 'text', true)}
         <label
-          >選考ステータス<select name="selectionStatus">
+          >選考状況<select name="selectionStatus">
             <option value="">未設定</option>
             ${Object.keys(selectionStatuses)
               .map(

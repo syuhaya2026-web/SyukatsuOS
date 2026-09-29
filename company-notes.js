@@ -14,7 +14,7 @@ export function companyNote(company, data) {
     '閲覧用の自動生成ファイルです。編集は就活OSから行ってください。',
     'このファイルをDriveで編集しても、アプリには反映されません。次回更新時に上書きされます。',
     '',
-    `選考ステータス：${company.selectionStatus || '未設定'}`,
+    `選考状況：${company.selectionStatus || '未設定'}`,
     `現在のステータス：${current}`,
     `My Page：${company.myPageUrl || '未登録'}`,
     `企業サイト：${company.companyUrl || '未登録'}`,

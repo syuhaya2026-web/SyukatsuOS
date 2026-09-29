@@ -1,10 +1,10 @@
 // アプリ本体のキャッシュ
-const CACHE = 'syukatsu-os-v16';
+const CACHE = 'syukatsu-os-v17';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
-  './app.js',
+  './app.js?v=17',
   './db.js',
   './drive-sync.js',
   './drive-store.js',
@@ -49,7 +49,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     (async () => {
       try {
-        const response = await fetch(event.request);
+        const response = await fetch(event.request, { cache: 'no-cache' });
         if (response.ok) {
           const cache = await caches.open(CACHE);
           await cache.put(event.request, response.clone());
