@@ -124,3 +124,11 @@ test('pending migration refuses a different account or client ID', async () => {
   await assert.rejects(migrateAccount({ ...s.args, clientId: 'wrong-client' }), /開始時と同じ/);
   assert.equal(s.get().state.owner, 'banned-owner');
 });
+
+test('two tabs cannot start separate migrations from the same local revision', async () => {
+  const s = setup();
+  const results = await Promise.allSettled([migrateAccount(s.args), migrateAccount(s.args)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal([...s.files.values()].filter(f => f.appProperties?.syukatsu === 'v1').length, 1);
+  assert.equal(s.get().state.owner, 'new-owner');
+});

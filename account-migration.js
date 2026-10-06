@@ -55,7 +55,7 @@ export async function migrateAccount({
       startedAt: new Date().toISOString(),
     };
     // 移行元と送信する内容を先に端末へ記録する。通常の記録は変更しない。
-    if (!(await syncUpdate(local.state.revision, { accountMigration: pending })))
+    if (!(await syncUpdate(local.state.revision, { accountMigration: pending, revision: crypto.randomUUID() })))
       throw new Changed();
   }
   if (pending.owner !== owner || pending.clientId !== clientId)
