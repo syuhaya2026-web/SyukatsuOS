@@ -1,12 +1,13 @@
 // アプリ本体のキャッシュ
-const CACHE = 'syukatsu-os-v17';
+const CACHE = 'syukatsu-os-v18';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
-  './app.js?v=17',
+  './app.js?v=18',
   './db.js',
   './drive-sync.js',
+  './account-migration.js',
   './drive-store.js',
   './merge.js',
   './company-notes.js',

@@ -1,3 +1,4 @@
+import { migrateAccount } from './account-migration.js';
 import { DriveStore, Changed, documentOf, WEEK } from './drive-store.js';
 import { commonBase, mergeRecords, deviceLabel, stable } from './merge.js';
 import { companyNote, noteName } from './company-notes.js';
@@ -8,6 +9,8 @@ import { validate, headsOf, readBoundedJSON, MAX_SNAPSHOT_BYTES } from './data-v
 export { validate, headsOf };
 const LIMIT = MAX_SNAPSHOT_BYTES;
 let historyDocs = [];
+let rescue = null,
+  rescueConfirmed = false;
 let scanBytes = 0,
   authPending = false;
 let token = '',
@@ -106,15 +109,74 @@ function conflictMarkup() {
   if (!conflict) return '';
   return `<div class="merge-conflicts"><p class="note">別々の変更は自動で取り込まれます。以下の衝突だけ残す内容を選んでください。「削除または編集」は関連記録にも影響します。</p>${conflict.pending.map((item, index) => `<section class="merge-item"><h3>${escape(item.company)}</h3><p class="muted">${escape({ companies: '企業情報', progress: '選考タイムライン', events: '予定', files: '添付ファイル' }[item.store])} / ${escape(item.record)} / ${escape(item.label)}</p>${item.variants.map((variant, n) => `<label class="merge-option"><span><input type="radio" name="merge-${index}" value="${n}" ${conflict.choices[item.key] === n ? 'checked' : ''}>${escape(variant.sources.map(deviceLabel).join(' / '))}</span><small>${escape(variant.sources.map((x) => new Date(x.savedAt).toLocaleString('ja-JP')).join(' / '))}</small><pre>${escape(conflictValue(item, variant))}</pre></label>`).join('')}</section>`).join('')}<button class="primary" id="drive-resolve" ${busy ? 'disabled' : ''}>選んだ項目を反映して統合</button></div>`;
 }
+// 認証なしの端末バックアップと、本人操作によるアカウント移行
+function rescueMarkup() {
+  return `<section class="backup-panel"><h3>端末のバックアップ・アカウント移行</h3><p>Googleに接続できなくても、企業・進捗・予定・添付をこの端末から取り出せます。</p><button id="rescue-prepare" ${busy || authPending ? 'disabled' : ''}>端末の全データをバックアップ</button>${rescue ? `<p>企業 ${rescue.doc.data.companies.length}件・進捗 ${rescue.doc.data.progress.length}件・予定 ${rescue.doc.data.events.length}件・添付 ${rescue.doc.data.files.length}件</p><a class="button" href="${rescue.url}" download="${rescue.file.name}">バックアップファイルを保存</a><button id="rescue-share">共有してファイルに保存</button><p class="muted">「このiPhone内」など、利用できる保存先を選んでください。端末内にない旧Driveの記録は含まれません。ファイルには個人情報と添付が含まれます。</p><label><input id="rescue-confirm" type="checkbox" ${rescueConfirmed ? 'checked' : ''}>ファイルアプリでバックアップの保存を確認しました</label><p>下のクライアントIDを新しいものに変更してから移行します。選んだアカウントに既存の就活OSフォルダがあれば、上書きせず停止します。</p><button id="rescue-migrate" ${!rescueConfirmed || busy || authPending || token ? 'disabled' : ''}>この端末の記録を新しいGoogleアカウントへ移す</button>` : ''}</section>`;
+}
+function bindRescue() {
+  panel.querySelector('#rescue-prepare').onclick = async () => {
+    if (busy || authPending) return;
+    busy = true;
+    notify('退避準備中', '端末内の添付も含めてバックアップを作成しています。');
+    try {
+      const local = await snapshot(),
+        doc = documentOf(await encode(local), thisDevice());
+      validate(doc);
+      const file = new File(
+        [JSON.stringify(doc, null, 2)],
+        '就活OS_端末バックアップ_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json',
+        { type: 'application/json' },
+      );
+      if (file.size > LIMIT)
+        throw new Error('バックアップが20MiBを超えています。端末データを残して停止しました。');
+      validate(JSON.parse(await file.text()));
+      if (rescue) URL.revokeObjectURL(rescue.url);
+      rescue = { doc, file, url: URL.createObjectURL(file), revision: local.state.revision };
+      rescueConfirmed = false;
+      notify(
+        '退避準備完了',
+        'まだファイルアプリには保存されていません。「バックアップファイルを保存」または共有から保存してください。',
+      );
+    } catch (e) {
+      notify('退避を確認', e.message);
+    } finally {
+      busy = false;
+      renderPanel();
+    }
+  };
+  const checkbox = panel.querySelector('#rescue-confirm');
+  if (checkbox)
+    checkbox.onchange = () => {
+      rescueConfirmed = checkbox.checked;
+      panel.querySelector('#rescue-migrate').disabled =
+        !rescueConfirmed || busy || authPending || !!token;
+    };
+  const share = panel.querySelector('#rescue-share');
+  if (share)
+    share.onclick = async () => {
+      try {
+        if (!navigator.canShare?.({ files: [rescue.file] }))
+          throw new Error(
+            'このブラウザでは共有できません。「バックアップファイルを保存」を使ってください。',
+          );
+        await navigator.share({ files: [rescue.file], title: '就活OSの端末バックアップ' });
+      } catch (e) {
+        if (e.name !== 'AbortError') notify('保存を確認', e.message);
+      }
+    };
+  const migrate = panel.querySelector('#rescue-migrate');
+  if (migrate) migrate.onclick = () => connect({ migration: true });
+}
 // 接続設定画面
 function renderPanel() {
   if (startMode) {
     renderStartup();
     return;
   }
-  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p>${conflictMarkup()}${backupMarkup()}<label>この端末の名前<input id="drive-device" maxlength="80" value="${escape(thisDevice().name)}"></label><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">接続中は保存直後と10秒ごとに同期します。別項目は自動統合し、同じ項目の変更だけ選択します。再起動・認証切れ後は接続操作が必要です。</p><div class="actions"><button id="drive-connect" ${token || busy || authPending ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token || busy ? 'disabled' : ''}>接続を解除</button></div><p class="muted">Driveの「企業別ノート」は閲覧用です。編集はアプリから行ってください。添付込み20MiB上限。週1回の全体バックアップを作り、30日を超えた分はゴミ箱へ移します。</p>`;
+  panel.innerHTML = `<div class="row"><h2>Google Drive同期</h2><button id="drive-close" aria-label="閉じる">✕</button></div><p>${escape(status)}</p><p class="info muted">${escape(message)}</p>${conflictMarkup()}${rescueMarkup()}${backupMarkup()}<label>この端末の名前<input id="drive-device" maxlength="80" value="${escape(thisDevice().name)}"></label><label>OAuthクライアントID<input id="drive-client" value="${escape(localStorage.getItem('drive-client-id') || '')}" placeholder="…apps.googleusercontent.com" ${token ? 'disabled' : ''}></label><p class="note">接続中は保存直後と10秒ごとに同期します。別項目は自動統合し、同じ項目の変更だけ選択します。再起動・認証切れ後は接続操作が必要です。</p><div class="actions"><button id="drive-connect" ${token || busy || authPending ? 'disabled' : ''}>Googleに接続</button><button id="drive-now" ${!token || busy ? 'disabled' : ''}>今すぐ同期</button><button id="drive-disconnect" ${!token || busy ? 'disabled' : ''}>接続を解除</button></div><p class="muted">Driveの「企業別ノート」は閲覧用です。編集はアプリから行ってください。添付込み20MiB上限。週1回の全体バックアップを作り、30日を超えた分はゴミ箱へ移します。</p>`;
   panel.querySelector('#drive-close').onclick = () => panel.close();
   bindBackups();
+  bindRescue();
   panel.querySelector('#drive-device').oninput = (e) => {
     localStorage.setItem('drive-device-name', e.target.value.trim().slice(0, 80));
   };
@@ -147,9 +209,11 @@ button.onclick = () => {
   loadGoogle().catch((e) => notify('接続エラー', e.message));
 };
 // Google OAuth（秘密鍵不要・アプリが作成したファイルだけの権限）
-function connect() {
+function connect({ migration = false } = {}) {
   if (busy || authPending || token) return;
   try {
+    if (migration && (!rescue || !rescueConfirmed))
+      throw new Error('先にバックアップをファイルアプリへ保存し、保存確認にチェックしてください。');
     const id = panel.querySelector('#drive-client').value.trim();
     if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(id))
       throw new Error('手順書に沿ってOAuthクライアントIDを入力してください。');
@@ -172,16 +236,56 @@ function connect() {
           token = result.access_token;
           expiry = Date.now() + Number(result.expires_in) * 1000 - 60000;
           try {
-            const info = await api('about?fields=user(permissionId)');
+            const info = await api('about?fields=user(permissionId,emailAddress)');
             owner = info.user?.permissionId;
             if (typeof owner !== 'string' || !owner)
               throw new Error('Googleアカウントを確認できませんでした。');
             const local = await snapshot();
-            if (local.state.owner && local.state.owner !== owner) {
+            if (
+              !migration &&
+              !local.state.accountMigration &&
+              local.state.owner &&
+              local.state.owner !== owner
+            ) {
               token = '';
               throw new Error(
-                'この端末は別のGoogleアカウントに紐付いています。元のアカウントで接続してください。',
+                '別のGoogleアカウントです。移行する場合は、先に下の「端末のバックアップ・アカウント移行」から退避して移行してください。',
               );
+            }
+            if (migration || local.state.accountMigration) {
+              if (
+                !local.state.accountMigration &&
+                !confirm(
+                  `この端末の全記録を ${info.user.emailAddress || '選択したGoogleアカウント'} の新しいDriveへコピーします。旧Driveは変更しません。続けますか？`,
+                )
+              ) {
+                token = '';
+                owner = '';
+                expiry = 0;
+                notify('移行中止', '端末の記録は変更していません。');
+                return;
+              }
+              busy = true;
+              scanBytes = 0;
+              try {
+                const task = () =>
+                  migrateAccount({
+                    api,
+                    owner,
+                    clientId: id,
+                    device: thisDevice(),
+                    snapshot,
+                    syncUpdate,
+                    encode,
+                    prepared: rescue,
+                    onProgress: operation,
+                  });
+                if (navigator.locks) await navigator.locks.request('syukatsu-drive', task);
+                else await task();
+              } finally {
+                busy = false;
+                operationBanner.hidden = true;
+              }
             }
             folder = '';
             backend = null;
@@ -737,6 +841,10 @@ function showV2Conflict(local, remote, base, heads, choices = {}) {
   }
 }
 async function perform() {
+  if ((await snapshot()).state.accountMigration)
+    throw new Error(
+      'アカウント移行が未完了です。移行先のGoogleアカウントへ再接続すると再開します。',
+    );
   scanBytes = 0;
   const store = await storeV2();
   if (!(await store.control())) {
@@ -1058,7 +1166,10 @@ function schedule() {
   );
   timer = setTimeout(run, 0);
 }
-window.addEventListener('local-change', schedule);
+window.addEventListener('local-change', () => {
+  rescueConfirmed = false;
+  schedule();
+});
 window.addEventListener('online', run);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') run();
