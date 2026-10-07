@@ -55,7 +55,12 @@ export async function migrateAccount({
       startedAt: new Date().toISOString(),
     };
     // 移行元と送信する内容を先に端末へ記録する。通常の記録は変更しない。
-    if (!(await syncUpdate(local.state.revision, { accountMigration: pending, revision: crypto.randomUUID() })))
+    if (
+      !(await syncUpdate(local.state.revision, {
+        accountMigration: pending,
+        revision: crypto.randomUUID(),
+      }))
+    )
       throw new Changed();
   }
   if (pending.owner !== owner || pending.clientId !== clientId)
@@ -115,4 +120,90 @@ export async function migrateAccount({
   )
     throw new Changed();
   return { root: pending.root, backup, companies: pending.doc.data.companies.length };
+}
+
+// 移行済みDriveを別端末で受信する。切替処理中はDriveへ一切書き込まない。
+export async function joinAccount({
+  api,
+  owner,
+  device,
+  snapshot,
+  syncUpdate,
+  encode,
+  decode,
+  prepared,
+  onConfirm,
+  onProgress = () => {},
+}) {
+  const local = await snapshot();
+  if (local.state.accountMigration)
+    throw new Error('この端末には未完了の送信移行があります。先にその移行を完了してください。');
+  if (!local.state.owner || local.state.owner === owner)
+    throw new Error('旧アカウントとは別の、iPhoneで移行済みのアカウントを選んでください。');
+  if (
+    !prepared ||
+    prepared.revision !== local.state.revision ||
+    stable(validate(prepared.doc).data) !== stable(await encode(local))
+  )
+    throw new Error('端末の最新バックアップを保存・確認してから切り替えてください。');
+  onProgress(
+    '移行先を確認中',
+    '新しいDriveの内容を読み込んでいます。まだ端末の記録は変更していません。',
+  );
+  const folders = await api(
+    'files?' +
+      new URLSearchParams({
+        q: "trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='syukatsu' and value='v1' }",
+        fields: 'files(id),nextPageToken',
+        pageSize: '2',
+      }),
+  );
+  if (folders.files.length !== 1 || folders.nextPageToken)
+    throw new Error(
+      '移行済みの保存先を一つに特定できません。iPhoneと同じアカウント・クライアントIDを確認してください。',
+    );
+  const store = new DriveStore(api, folders.files[0].id, device);
+  const remote = await store.load();
+  if (!Object.values(remote.data).some((rows) => rows.length))
+    throw new Error('移行先に記録がありません。iPhoneでの移行を確認してください。');
+  const latest = [...remote.control.value.backups].sort((a, b) =>
+    b.savedAt.localeCompare(a.savedAt),
+  )[0];
+  if (!latest)
+    throw new Error('移行先に全体バックアップがありません。iPhoneでの移行を確認してください。');
+  await store.readBackup(latest);
+  const summary = {
+    companies: remote.data.companies.length,
+    progress: remote.data.progress.length,
+    events: remote.data.events.length,
+    files: remote.data.files.length,
+  };
+  if (!(await onConfirm(summary))) return false;
+  const fresh = await store.load();
+  if (fresh.signature !== remote.signature) throw new Changed();
+  const current = await snapshot();
+  if (
+    current.state.revision !== local.state.revision ||
+    current.state.owner !== local.state.owner ||
+    current.state.accountMigration
+  )
+    throw new Changed();
+  const replacement = decode({ ...prepared.doc, data: remote.data });
+  if (
+    !(await syncUpdate(
+      local.state.revision,
+      {
+        owner,
+        base: [],
+        v2Base: remote.data,
+        v2Control: store.controlId,
+        dirty: false,
+        accountMigration: null,
+        revision: crypto.randomUUID(),
+      },
+      replacement,
+    ))
+  )
+    throw new Changed();
+  return true;
 }

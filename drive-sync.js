@@ -1,4 +1,4 @@
-import { migrateAccount } from './account-migration.js';
+import { migrateAccount, joinAccount } from './account-migration.js';
 import { DriveStore, Changed, documentOf, WEEK } from './drive-store.js';
 import { commonBase, mergeRecords, deviceLabel, stable } from './merge.js';
 import { companyNote, noteName } from './company-notes.js';
@@ -111,7 +111,7 @@ function conflictMarkup() {
 }
 // 認証なしの端末バックアップと、本人操作によるアカウント移行
 function rescueMarkup() {
-  return `<section class="backup-panel"><h3>端末のバックアップ・アカウント移行</h3><p>Googleに接続できなくても、企業・進捗・予定・添付をこの端末から取り出せます。</p><button id="rescue-prepare" ${busy || authPending ? 'disabled' : ''}>端末の全データをバックアップ</button>${rescue ? `<p>企業 ${rescue.doc.data.companies.length}件・進捗 ${rescue.doc.data.progress.length}件・予定 ${rescue.doc.data.events.length}件・添付 ${rescue.doc.data.files.length}件</p><a class="button" href="${rescue.url}" download="${rescue.file.name}">バックアップファイルを保存</a><button id="rescue-share">共有してファイルに保存</button><p class="muted">「このiPhone内」など、利用できる保存先を選んでください。端末内にない旧Driveの記録は含まれません。ファイルには個人情報と添付が含まれます。</p><label><input id="rescue-confirm" type="checkbox" ${rescueConfirmed ? 'checked' : ''}>ファイルアプリでバックアップの保存を確認しました</label><p>下のクライアントIDを新しいものに変更してから移行します。選んだアカウントに既存の就活OSフォルダがあれば、上書きせず停止します。</p><button id="rescue-migrate" ${!rescueConfirmed || busy || authPending || token ? 'disabled' : ''}>この端末の記録を新しいGoogleアカウントへ移す</button>` : ''}</section>`;
+  return `<section class="backup-panel"><h3>端末のバックアップ・アカウント移行</h3><p>Googleに接続できなくても、企業・進捗・予定・添付をこの端末から取り出せます。</p><button id="rescue-prepare" ${busy || authPending ? 'disabled' : ''}>端末の全データをバックアップ</button>${rescue ? `<p>企業 ${rescue.doc.data.companies.length}件・進捗 ${rescue.doc.data.progress.length}件・予定 ${rescue.doc.data.events.length}件・添付 ${rescue.doc.data.files.length}件</p><a class="button" href="${rescue.url}" download="${rescue.file.name}">バックアップファイルを保存</a><button id="rescue-share">共有してファイルに保存</button><p class="muted">「このiPhone内」など、利用できる保存先を選んでください。端末内にない旧Driveの記録は含まれません。ファイルには個人情報と添付が含まれます。</p><label><input id="rescue-confirm" type="checkbox" ${rescueConfirmed ? 'checked' : ''}>ファイルアプリ・Finderでバックアップの保存を確認しました</label><p>下のクライアントIDを新しいものに変更してから移行します。選んだアカウントに既存の就活OSフォルダがあれば、上書きせず停止します。</p><button id="rescue-migrate" ${!rescueConfirmed || busy || authPending || token ? 'disabled' : ''}>この端末の記録を新しいGoogleアカウントへ移す</button><p>iPhoneから新しいDriveへの移行が済んだMacはこちら。Macの表示をDriveの内容に切り替えます。Macだけの変更は退避ファイルに残ります。</p><button id="rescue-join" ${!rescueConfirmed || busy || authPending || token ? 'disabled' : ''}>移行済みのDriveをこの端末で使う</button>` : ''}</section>`;
 }
 function bindRescue() {
   panel.querySelector('#rescue-prepare').onclick = async () => {
@@ -148,6 +148,8 @@ function bindRescue() {
   if (checkbox)
     checkbox.onchange = () => {
       rescueConfirmed = checkbox.checked;
+      panel.querySelector('#rescue-join').disabled =
+        !rescueConfirmed || busy || authPending || !!token;
       panel.querySelector('#rescue-migrate').disabled =
         !rescueConfirmed || busy || authPending || !!token;
     };
@@ -166,6 +168,8 @@ function bindRescue() {
     };
   const migrate = panel.querySelector('#rescue-migrate');
   if (migrate) migrate.onclick = () => connect({ migration: true });
+  const join = panel.querySelector('#rescue-join');
+  if (join) join.onclick = () => connect({ join: true });
 }
 // 接続設定画面
 function renderPanel() {
@@ -209,10 +213,10 @@ button.onclick = () => {
   loadGoogle().catch((e) => notify('接続エラー', e.message));
 };
 // Google OAuth（秘密鍵不要・アプリが作成したファイルだけの権限）
-function connect({ migration = false } = {}) {
+function connect({ migration = false, join = false } = {}) {
   if (busy || authPending || token) return;
   try {
-    if (migration && (!rescue || !rescueConfirmed))
+    if ((migration || join) && (!rescue || !rescueConfirmed))
       throw new Error('先にバックアップをファイルアプリへ保存し、保存確認にチェックしてください。');
     const id = panel.querySelector('#drive-client').value.trim();
     if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(id))
@@ -243,6 +247,7 @@ function connect({ migration = false } = {}) {
             const local = await snapshot();
             if (
               !migration &&
+              !join &&
               !local.state.accountMigration &&
               local.state.owner &&
               local.state.owner !== owner
@@ -252,7 +257,43 @@ function connect({ migration = false } = {}) {
                 '別のGoogleアカウントです。移行する場合は、先に下の「端末のバックアップ・アカウント移行」から退避して移行してください。',
               );
             }
-            if (migration || local.state.accountMigration) {
+            if (join) {
+              busy = true;
+              scanBytes = 0;
+              let accepted;
+              try {
+                const task = () =>
+                  joinAccount({
+                    api,
+                    owner,
+                    device: thisDevice(),
+                    snapshot,
+                    syncUpdate,
+                    encode,
+                    decode,
+                    prepared: rescue,
+                    onProgress: operation,
+                    onConfirm: (counts) =>
+                      confirm(
+                        `${info.user.emailAddress || '選択したアカウント'} のDrive：企業 ${counts.companies}件・進捗 ${counts.progress}件・予定 ${counts.events}件・添付 ${counts.files}件。\nこの端末の表示を上記の内容へ切り替えます。Macだけの変更は保存したバックアップファイルに残り、Driveには送りません。切り替えますか？`,
+                      ),
+                  });
+                accepted = navigator.locks
+                  ? await navigator.locks.request('syukatsu-drive', task)
+                  : await task();
+              } finally {
+                busy = false;
+                operationBanner.hidden = true;
+              }
+              if (!accepted) {
+                token = '';
+                owner = '';
+                expiry = 0;
+                notify('切替中止', '端末とDriveの記録は変更していません。');
+                return;
+              }
+              window.dispatchEvent(new Event('drive-data'));
+            } else if (migration || local.state.accountMigration) {
               if (
                 !local.state.accountMigration &&
                 !confirm(

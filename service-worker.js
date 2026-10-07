@@ -1,10 +1,10 @@
 // アプリ本体のキャッシュ
-const CACHE = 'syukatsu-os-v19';
+const CACHE = 'syukatsu-os-v20';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
-  './app.js?v=19',
+  './app.js?v=20',
   './db.js',
   './drive-sync.js',
   './account-migration.js',
